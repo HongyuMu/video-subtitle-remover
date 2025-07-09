@@ -649,7 +649,7 @@ class SubtitleRemover:
     @staticmethod
     def is_current_frame_no_start(frame_no, continuous_frame_no_list):
         """
-        判断给定的帧号是否为开头，是的话返回结束帧号，不是的话返回-1
+        判断给定的帧号是否为开头
         """
         for start_no, end_no in continuous_frame_no_list:
             if start_no == frame_no:
@@ -659,7 +659,7 @@ class SubtitleRemover:
     @staticmethod
     def find_frame_no_end(frame_no, continuous_frame_no_list):
         """
-        判断给定的帧号是否为开头，是的话返回结束帧号，不是的话返回-1
+        判断给定的帧号是否为结尾，是的话返回结束帧号，不是的话返回-1
         """
         for start_no, end_no in continuous_frame_no_list:
             if start_no <= frame_no <= end_no:
@@ -776,7 +776,7 @@ class SubtitleRemover:
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
         if config.STTN_SKIP_DETECTION:
-            # 若跳过则世界使用sttn模式
+            # 若跳过则直接使用sttn模式
             self.sttn_mode_with_no_detection(tbar)
         else:
             print('use sttn mode')
