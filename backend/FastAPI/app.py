@@ -1,29 +1,27 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
-import shutil
-import subprocess
-import os
 from pathlib import Path
-import threading
-import cv2
-import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import logging
+import os
 
 import tempfile
-import time
-from tqdm import tqdm
-from backend.tools.inpaint_tools import create_mask
-from backend.inpaint.lama_inpaint import LamaInpaint
-from backend.inpaint.sttn_inpaint import STTNInpaint
-from backend.inpaint.video_inpaint import VideoInpaint
-from backend.scenedetect import scene_detect
 from backend.tools.common_tools import is_video_or_image
-from backend.scenedetect.detectors import ContentDetector
 from backend.main import SubtitleRemover
 from typing import Optional
 
 app = FastAPI()
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+@app.get("/")
+async def root():
+    return {"Message": "Visit docs to remove subtitles in your videos!"}
+
+def ensure_processed_videos_dir():
+    processed_videos_dir = Path(__file__).resolve().parent / "processed_videos"
+    if not processed_videos_dir.exists():
+        os.makedirs(processed_videos_dir)
+    return processed_videos_dir
 
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
@@ -38,34 +36,59 @@ async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str]
         temp_file.write(await file.read())
         temp_video_path = temp_file.name
 
+    video_filename = Path(temp_video_path).name
+    status_file = Path(ensure_processed_videos_dir()) / f"{video_filename}.status"  # Status file to track progress
+    
+    # Initialize the status file
+    with open(status_file, 'w') as file:
+        file.write("Processing...")
+
     # Process the video in the background (for large video files)
-    background_tasks.add_task(process_video, temp_video_path, sub_area)
+    background_tasks.add_task(process_video, temp_video_path, status_file, sub_area)
 
     return {"message": "Video received. Subtitle removal is in progress."}
 
 # Function to handle video processing in the background
-def process_video(video_path: str, sub_area: Optional[str]):
-    video_path = Path(video_path)
+def process_video(video_path: str, status_file: Path, sub_area: Optional[str]):
+    video_filename = Path(video_path).name
+    logging.info(f"Starting subtitle removal for {video_filename}...")
+    ensure_processed_videos_dir()
 
-    # Set subtitle area if provided (Convert to tuple if given)
+    # Set subtitle area if provided
     if sub_area:
         ymin, ymax, xmin, xmax = map(int, sub_area.split(","))
         sub_area_tuple = (ymin, ymax, xmin, xmax)
     else:
         sub_area_tuple = None
 
-    # Create SubtitleRemover object
+    # Create SubtitleRemover object and run the subtitle removal
     sd = SubtitleRemover(video_path, sub_area=sub_area_tuple)
     sd.run()  # Run subtitle removal
 
-    print(f"Subtitle removal completed for {video_path}")
+    # After the process is done, update the status to "Completed"
+    with open(status_file, 'w') as file:
+        file.write("Completed")
 
-    # Optionally, you can return or store the final result in a specific location.
+    logging.info(f"Subtitle removal completed for {video_filename}.")
+    print(f"Subtitle removal completed for {video_path}.")
+
+# Endpoint to track the status of removal process
+@app.get("/status/{video_filename}")
+async def video_status(video_filename: str):
+    status_file = Path(ensure_processed_videos_dir()) / f"{video_filename}.status"
+    
+    # Check if the status file exists and read its contents
+    if status_file.exists():
+        with open(status_file, 'r') as file:
+            status = file.read()
+        return {"status": status}
+    else:
+        return {"status": "Video is being processed or not found."}
 
 # Endpoint to fetch the processed video
 @app.get("/download_video/{video_filename}")
 async def download_video(video_filename: str):
-    video_path = Path(f"./processed_videos/{video_filename}")
+    video_path = Path(ensure_processed_videos_dir()) / video_filename
     if video_path.exists():
         return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
     else:
