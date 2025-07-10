@@ -3,7 +3,6 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
-
 import tempfile
 from backend.tools.common_tools import is_video_or_image
 from backend.main import SubtitleRemover
@@ -21,6 +20,7 @@ def ensure_processed_videos_dir():
     processed_videos_dir = Path(__file__).resolve().parent / "processed_videos"
     if not processed_videos_dir.exists():
         os.makedirs(processed_videos_dir)
+        logging.info(f"Created directory: {processed_videos_dir}")
     return processed_videos_dir
 
 # Endpoint for video upload and subtitle removal
@@ -29,30 +29,34 @@ async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str]
     """
     Endpoint to remove subtitles from an uploaded video. Optionally, a sub_area can be specified for subtitle region.
     """
-    # Save the uploaded video temporarily
-    print(f"File received: {file.filename}")
+    original_filename = file.filename
+    print(f"File received: {original_filename}")
     print(f"Sub Area: {sub_area}")
+
+    # Save the uploaded video temporarily
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
         temp_file.write(await file.read())
         temp_video_path = temp_file.name
 
-    video_filename = Path(temp_video_path).name
-    status_file = Path(ensure_processed_videos_dir()) / f"{video_filename}.status"  # Status file to track progress
+    # Use the original filename to create a status file
+    status_file = Path(ensure_processed_videos_dir()) / f"{original_filename}.status"  # Status file to track progress
     
     # Initialize the status file
-    with open(status_file, 'w') as file:
-        file.write("Processing...")
+    with open(status_file, 'w') as status:
+        status.write("Processing...")
 
     # Process the video in the background (for large video files)
-    background_tasks.add_task(process_video, temp_video_path, status_file, sub_area)
+    background_tasks.add_task(process_video, temp_video_path, status_file, sub_area, original_filename)
 
     return {"message": "Video received. Subtitle removal is in progress."}
 
 # Function to handle video processing in the background
-def process_video(video_path: str, status_file: Path, sub_area: Optional[str]):
-    video_filename = Path(video_path).name
-    logging.info(f"Starting subtitle removal for {video_filename}...")
-    ensure_processed_videos_dir()
+def process_video(video_path: str, status_file: Path, sub_area: Optional[str], original_filename: str):
+    logging.info(f"Starting subtitle removal for {original_filename}...")
+
+    # Initialize the status file as "Processing..."
+    with open(status_file, 'w') as file:
+        file.write("Processing...")
 
     # Set subtitle area if provided
     if sub_area:
@@ -69,7 +73,10 @@ def process_video(video_path: str, status_file: Path, sub_area: Optional[str]):
     with open(status_file, 'w') as file:
         file.write("Completed")
 
-    logging.info(f"Subtitle removal completed for {video_filename}.")
+    processed_video_path = Path(ensure_processed_videos_dir()) / f"processed_{original_filename}"
+    os.rename(video_path, processed_video_path)
+
+    logging.info(f"Subtitle removal completed for {original_filename}.")
     print(f"Subtitle removal completed for {video_path}.")
 
 # Endpoint to track the status of removal process
@@ -77,13 +84,20 @@ def process_video(video_path: str, status_file: Path, sub_area: Optional[str]):
 async def video_status(video_filename: str):
     status_file = Path(ensure_processed_videos_dir()) / f"{video_filename}.status"
     
-    # Check if the status file exists and read its contents
-    if status_file.exists():
-        with open(status_file, 'r') as file:
-            status = file.read()
-        return {"status": status}
+    logging.info(f"Checking status for file: {status_file}")
+
+    if not status_file.exists():
+        return {"status": "Video Not Found"}
+
+    with open(status_file, 'r') as file:
+        status = file.read().strip()
+
+    if status == "Processing...":
+        return {"status": "Processing"}
+    elif status == "Completed":
+        return {"status": "Completed"}
     else:
-        return {"status": "Video is being processed or not found."}
+        return {"status": "Unknown Status"}
 
 # Endpoint to fetch the processed video
 @app.get("/download_video/{video_filename}")
@@ -91,17 +105,5 @@ async def download_video(video_filename: str):
     video_path = Path(ensure_processed_videos_dir()) / video_filename
     if video_path.exists():
         return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
-    else:
-        return {"error": "Video file not found!"}
-
-# Additional utility endpoint to check video format (for validation)
-@app.get("/check_video/{video_filename}")
-async def check_video(video_filename: str):
-    video_path = Path(f"./uploaded_videos/{video_filename}")
-    if video_path.exists():
-        if is_video_or_image(str(video_path)):
-            return {"message": f"{video_filename} is a valid video!"}
-        else:
-            return {"message": f"{video_filename} is not a valid video!"}
     else:
         return {"error": "Video file not found!"}
