@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
+import shutil
 import tempfile
 from backend.tools.common_tools import is_video_or_image
 from backend.main import SubtitleRemover
@@ -48,7 +49,9 @@ async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str]
     # Process the video in the background (for large video files)
     background_tasks.add_task(process_video, temp_video_path, status_file, sub_area, original_filename)
 
-    return {"message": "Video received. Subtitle removal is in progress."}
+    processed_video_filename = f"processed_{original_filename}"
+    download_url = f"/download_video/{processed_video_filename}"
+    return {"message": "Video received. Begin subtitle removal.", "filename": original_filename, "download at": download_url}
 
 # Function to handle video processing in the background
 def process_video(video_path: str, status_file: Path, sub_area: Optional[str], original_filename: str):
@@ -74,10 +77,16 @@ def process_video(video_path: str, status_file: Path, sub_area: Optional[str], o
         file.write("Completed")
 
     processed_video_path = Path(ensure_processed_videos_dir()) / f"processed_{original_filename}"
-    os.rename(video_path, processed_video_path)
 
-    logging.info(f"Subtitle removal completed for {original_filename}.")
-    print(f"Subtitle removal completed for {video_path}.")
+    try:
+        # Copy the processed video to the target directory
+        shutil.copy2(video_path, processed_video_path)  # Copy the file with metadata
+        logging.info(f"Subtitle removal completed for {original_filename}. Processed video saved at {processed_video_path}.")
+        print(f"Subtitle removal completed for {video_path}.")
+        os.remove(video_path)  # Remove the temporary video file
+    except Exception as e:
+        logging.error(f"Error during file copy or removal: {e}")
+        print(f"Error during file copy or removal: {e}")
 
 # Endpoint to track the status of removal process
 @app.get("/status/{video_filename}")
@@ -102,8 +111,16 @@ async def video_status(video_filename: str):
 # Endpoint to fetch the processed video
 @app.get("/download_video/{video_filename}")
 async def download_video(video_filename: str):
-    video_path = Path(ensure_processed_videos_dir()) / video_filename
+    # Ensure the processed_videos directory exists
+    processed_videos_dir = ensure_processed_videos_dir()
+    
+    # Construct the full path to the processed video (with 'processed_' prefix)
+    video_path = processed_videos_dir / video_filename
+    
+    # Check if the processed video file exists
     if video_path.exists():
+        # Return the processed video file to the user as a download
         return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
     else:
-        return {"error": "Video file not found!"}
+        # Return an error message if the processed video file does not exist
+        return {"error": "Processed video file not found!"}
