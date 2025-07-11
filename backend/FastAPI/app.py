@@ -79,8 +79,11 @@ def process_video(video_path: str, status_file: Path, sub_area: Optional[str], o
     processed_video_path = Path(ensure_processed_videos_dir()) / f"processed_{original_filename}"
 
     try:
-        # Copy the processed video to the target directory
-        shutil.copy2(video_path, processed_video_path)  # Copy the file with metadata
+        # Copy the processed video path in self to the target directory
+        output_path = Path(sd.video_out_name)
+
+        # Copy the actual processed video instead
+        shutil.copy2(output_path, processed_video_path)
         logging.info(f"Subtitle removal completed for {original_filename}. Processed video saved at {processed_video_path}.")
         print(f"Subtitle removal completed for {video_path}.")
         os.remove(video_path)  # Remove the temporary video file
