@@ -1,0 +1,36 @@
+version: 0.0.1
+type: plugin
+author: hongyumu
+name: sub_remover
+label:
+  en_US: sub_remover
+  ja_JP: sub_remover
+  zh_Hans: sub_remover
+  pt_BR: sub_remover
+description:
+  en_US: remove the subtitles from input video urls and return an mp4 file
+  ja_JP: remove the subtitles from input video urls and return an mp4 file
+  zh_Hans: remove the subtitles from input video urls and return an mp4 file
+  pt_BR: remove the subtitles from input video urls and return an mp4 file
+icon: icon.svg
+resource:
+  memory: 268435456
+  permission:
+    tool:
+      enabled: true
+plugins:
+  tools:
+    - provider/sub_remover.yaml
+meta:
+  version: 0.0.1
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main
+  minimum_dify_version: null
+created_at: 2025-07-11T17:20:32.9297488+08:00
+privacy: PRIVACY.md
+verified: false

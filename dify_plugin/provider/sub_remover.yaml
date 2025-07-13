@@ -1,0 +1,17 @@
+identity:
+  author: "hongyumu"
+  name: "sub_remover"
+  label:
+    en_US: "sub_remover"
+    zh_Hans: "字幕移除工具"
+    pt_BR: "sub_remover"
+  description:
+    en_US: "remove the subtitles from input video urls and return an mp4 file"
+    zh_Hans: "从输入的视频url中识别并移除字幕，生成mp4文件"
+    pt_BR: "remove the subtitles from input video urls and return an mp4 file"
+  icon: "icon.svg"
+tools:
+  - tools/sub_remover.yaml
+extra:
+  python:
+    source: provider/sub_remover.py
