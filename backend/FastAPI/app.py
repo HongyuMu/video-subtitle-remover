@@ -24,7 +24,7 @@ async def register(user: UserCreate):
     try:
         new_user = register_user(user.username)
         return {"message": "User registered", "api_key": new_user["api_key"]}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail="User registration failed")
     
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

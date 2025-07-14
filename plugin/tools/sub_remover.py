@@ -37,6 +37,17 @@ class SubRemoverTool(Tool):
                 "output_video_path": sd.video_out_name  # Path of the processed video
             })
         
+        except FileNotFoundError as fnf_error:
+            logging.error(f"File not found: {fnf_error}")
+            yield self.create_json_message({
+                "error": f"File not found: {str(fnf_error)}"
+            })
+        except ValueError as ve:
+            logging.error(f"Value error: {ve}")
+            yield self.create_json_message({
+                "error": f"Invalid value: {str(ve)}"
+            })
+        
         except Exception as e:
             logging.error(f"Error during subtitle removal: {e}")
             yield self.create_json_message({
