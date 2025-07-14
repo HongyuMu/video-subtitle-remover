@@ -20,3 +20,10 @@ def register_user(username: str):
     db = next(get_db())
     user = create_user(db, username)
     return {"username": user.username, "api_key": user.api_key}
+
+def validate_api_key(api_key: str) -> bool:
+    db = next(get_db())
+    user = db.query(User).filter(User.api_key == api_key).first()
+    if user:
+        return True
+    return False
