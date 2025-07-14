@@ -1,13 +1,18 @@
-from typing import Any
-
+from sqlalchemy.orm import Session
 from dify_plugin import ToolProvider
 from dify_plugin.errors.tool import ToolProviderCredentialValidationError
+from backend.FastAPI.models import User, get_db
 
 class SubRemoverProvider(ToolProvider):
-    def _validate_credentials(self, credentials: dict[str, Any]) -> None:
-        try:
-            """
-            IMPLEMENT YOUR VALIDATION HERE
-            """
-        except Exception as e:
-            raise ToolProviderCredentialValidationError(str(e))
+    def _validate_credentials(self, credentials: dict[str, str]) -> None:
+        api_key = credentials.get("api_key")
+        if not api_key:
+            raise ToolProviderCredentialValidationError("API key is missing.")
+        
+        db = next(get_db())  # Get a database session
+        user = db.query(User).filter(User.api_key == api_key).first()
+        
+        if not user:
+            raise ToolProviderCredentialValidationError("Invalid API key.")
+        
+        print(f"API key for {user.username} validated.")

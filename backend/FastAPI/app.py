@@ -1,18 +1,32 @@
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
 from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
 import shutil
 import tempfile
-from backend.tools.common_tools import is_video_or_image
 from backend.main import SubtitleRemover
 from typing import Optional
 from dify_plugin import Plugin, DifyPluginEnv
 from plugin.tools.sub_remover import SubRemoverTool
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from models import get_db
+from auth import register_user
 
 app = FastAPI()
 
+class UserCreate(BaseModel):
+    username: str
+
+@app.post("/register/")
+async def register(user: UserCreate):
+    try:
+        new_user = register_user(user.username)
+        return {"message": "User registered", "api_key": new_user["api_key"]}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="User registration failed")
+    
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 @app.get("/")
