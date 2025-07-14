@@ -1,6 +1,6 @@
 import secrets
 from sqlalchemy.orm import Session
-from models import User, get_db
+from FastAPI.user_models import User, get_db
 from fastapi import HTTPException
 
 # Function to generate a random API key
