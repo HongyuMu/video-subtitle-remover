@@ -17,6 +17,10 @@ from auth import validate_api_key
 
 app = FastAPI()
 
+plugin = Plugin(DifyPluginEnv(MAX_REQUEST_TIMEOUT=120))
+plugin.add_tool(SubRemoverTool)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
 class UserCreate(BaseModel):
     username: str
 
@@ -27,8 +31,6 @@ async def register(user: UserCreate):
         return {"message": "User registered", "api_key": new_user["api_key"]}
     except Exception:
         raise HTTPException(status_code=400, detail="User registration failed")
-    
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 @app.get("/")
 async def root():
@@ -170,3 +172,6 @@ async def download_video(video_filename: str):
     else:
         # Return an error message if the processed video file does not exist
         return {"error": "Processed video file not found!"}
+    
+if __name__ == "__main__":
+    plugin.run()
