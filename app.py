@@ -11,9 +11,8 @@ from dify_plugin import Plugin, DifyPluginEnv
 from plugin.tools.sub_remover import SubRemoverTool
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from models import get_db
-from auth import register_user
-from auth import validate_api_key
+from FastAPI.models import get_db
+from FastAPI.auth import register_user, validate_api_key
 
 app = FastAPI()
 
