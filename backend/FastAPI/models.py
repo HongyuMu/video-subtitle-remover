@@ -12,8 +12,8 @@ class User(Base):
     username = Column(String, unique=True, nullable=False)
     api_key = Column(String, unique=True, nullable=False)
 
-# Database connection (SQLite for this example)
-DATABASE_URL = "sqlite:///./test.db"
+# Database connection
+DATABASE_URL = "sqlite:///./user_info.db"
 engine = create_engine(DATABASE_URL)
 Base.metadata.create_all(bind=engine)
 
