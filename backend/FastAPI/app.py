@@ -8,6 +8,8 @@ import tempfile
 from backend.tools.common_tools import is_video_or_image
 from backend.main import SubtitleRemover
 from typing import Optional
+from dify_plugin import Plugin, DifyPluginEnv
+from plugin.tools.sub_remover import SubRemoverTool
 
 app = FastAPI()
 
@@ -56,6 +58,18 @@ async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str]
 # Function to handle video processing in the background
 def process_video(video_path: str, status_file: Path, sub_area: Optional[str], original_filename: str):
     logging.info(f"Starting subtitle removal for {original_filename}...")
+
+    tool_parameters = {
+        "video_path": video_path,
+        "sub_area": sub_area
+    }
+    
+    # Create an instance of the tool
+    tool = SubRemoverTool()
+
+    # Invoke the tool
+    result = next(tool._invoke(tool_parameters))  # Get the result from the tool
+    logging.info(f"Result from tool: {result['result']}")
 
     # Initialize the status file as "Processing..."
     with open(status_file, 'w') as file:
