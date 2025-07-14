@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from models import get_db
 from auth import register_user
+from auth import validate_api_key
 
 app = FastAPI()
 
@@ -42,10 +43,12 @@ def ensure_processed_videos_dir():
 
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
-async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str] = None, background_tasks: BackgroundTasks = BackgroundTasks()):
+async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str] = None, api_key: str = None, background_tasks: BackgroundTasks = BackgroundTasks()):
     """
     Endpoint to remove subtitles from an uploaded video. Optionally, a sub_area can be specified for subtitle region.
     """
+    if not api_key or not validate_api_key(api_key):
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
     original_filename = file.filename
     print(f"File received: {original_filename}")
     print(f"Sub Area: {sub_area}")
@@ -71,53 +74,65 @@ async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str]
 
 # Function to handle video processing in the background
 def process_video(video_path: str, status_file: Path, sub_area: Optional[str], original_filename: str):
-    logging.info(f"Starting subtitle removal for {original_filename}...")
-
-    tool_parameters = {
-        "video_path": video_path,
-        "sub_area": sub_area
-    }
-    
-    # Create an instance of the tool
-    tool = SubRemoverTool()
-
-    # Invoke the tool
-    result = next(tool._invoke(tool_parameters))  # Get the result from the tool
-    logging.info(f"Result from tool: {result['result']}")
-
-    # Initialize the status file as "Processing..."
-    with open(status_file, 'w') as file:
-        file.write("Processing...")
-
-    # Set subtitle area if provided
-    if sub_area:
-        ymin, ymax, xmin, xmax = map(int, sub_area.split(","))
-        sub_area_tuple = (ymin, ymax, xmin, xmax)
-    else:
-        sub_area_tuple = None
-
-    # Create SubtitleRemover object and run the subtitle removal
-    sd = SubtitleRemover(video_path, sub_area=sub_area_tuple)
-    sd.run()  # Run subtitle removal
-
-    # After the process is done, update the status to "Completed"
-    with open(status_file, 'w') as file:
-        file.write("Completed")
-
-    processed_video_path = Path(ensure_processed_videos_dir()) / f"processed_{original_filename}"
-
     try:
-        # Copy the processed video path in self to the target directory
-        output_path = Path(sd.video_out_name)
+        logging.info(f"Starting subtitle removal for {original_filename}...")
 
-        # Copy the actual processed video instead
-        shutil.copy2(output_path, processed_video_path)
-        logging.info(f"Subtitle removal completed for {original_filename}. Processed video saved at {processed_video_path}.")
-        print(f"Subtitle removal completed for {video_path}.")
-        os.remove(video_path)  # Remove the temporary video file
+        tool_parameters = {
+            "video_path": video_path,
+            "sub_area": sub_area
+        }
+        
+        # Create an instance of the tool
+        tool = SubRemoverTool()
+
+        # Invoke the tool
+        result = next(tool._invoke(tool_parameters))  # Get the result from the tool
+        logging.info(f"Result from tool: {result['result']}")
+
+        # Initialize the status file as "Processing..."
+        with open(status_file, 'w') as file:
+            file.write("Processing...")
+
+        # Set subtitle area if provided
+        if sub_area:
+            ymin, ymax, xmin, xmax = map(int, sub_area.split(","))
+            sub_area_tuple = (ymin, ymax, xmin, xmax)
+        else:
+            sub_area_tuple = None
+
+        # Create SubtitleRemover object and run the subtitle removal
+        sd = SubtitleRemover(video_path, sub_area=sub_area_tuple)
+        sd.run()  # Run subtitle removal
+
+        # After the process is done, update the status to "Completed"
+        with open(status_file, 'w') as file:
+            file.write("Completed")
+
+        processed_video_path = Path(ensure_processed_videos_dir()) / f"processed_{original_filename}"
+
+        try:
+            # Copy the processed video path in self to the target directory
+            output_path = Path(sd.video_out_name)
+
+            if output_path.exists():
+                shutil.copy2(output_path, processed_video_path)
+                logging.info(f"Subtitle removal completed for {original_filename}. Processed video saved at {processed_video_path}.")
+                print(f"Subtitle removal completed for {video_path}.")
+                os.remove(video_path)  # Remove the temporary video file
+            else:
+                logging.error(f"Processed video not found at {output_path}.")
+                raise FileNotFoundError(f"Processed video not found: {output_path}")
+        except Exception as e:
+            logging.error(f"Error during file copy: {e}")
+            print(f"Error during file copy: {e}")
+
     except Exception as e:
-        logging.error(f"Error during file copy or removal: {e}")
-        print(f"Error during file copy or removal: {e}")
+        logging.error(f"Error during subtitle removal process for {original_filename}: {e}")
+        print(f"Error during subtitle removal process: {e}")
+
+    finally:
+        if os.path.exists(video_path):
+            os.remove(video_path)
 
 # Endpoint to track the status of removal process
 @app.get("/status/{video_filename}")

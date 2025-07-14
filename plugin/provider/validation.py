@@ -9,10 +9,17 @@ class SubRemoverProvider(ToolProvider):
         if not api_key:
             raise ToolProviderCredentialValidationError("API key is missing.")
         
-        db = next(get_db())  # Get a database session
-        user = db.query(User).filter(User.api_key == api_key).first()
+        try:
+            db = next(get_db())  # Get a database session
+            user = db.query(User).filter(User.api_key == api_key).first()
+            
+            if not user:
+                raise ToolProviderCredentialValidationError("Invalid API key.")
+            
+            print(f"API key for {user.username} validated.")
+
+        except Exception as e:
+            raise ToolProviderCredentialValidationError(f"Error validating API key: {str(e)}")
         
-        if not user:
-            raise ToolProviderCredentialValidationError("Invalid API key.")
-        
-        print(f"API key for {user.username} validated.")
+        finally:
+            db.close()
