@@ -5,31 +5,31 @@ import logging
 import os
 import shutil
 import tempfile
-from backend.main import SubtitleRemover
+from backend.main import SubtitleRemover, SubtitleDetect
 from typing import Optional
-from dify_plugin import Plugin, DifyPluginEnv
-from plugin.tools.sub_remover import SubRemoverTool
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from FastAPI.user_models import get_db
-from FastAPI.auth import register_user, validate_api_key
+# from dify_plugin import Plugin, DifyPluginEnv
+# from plugin.tools.sub_remover import SubRemoverTool
+# from pydantic import BaseModel
+# from sqlalchemy.orm import Session
+# from FastAPI.user_models import get_db
+# from FastAPI.auth import register_user, validate_api_key
 
 app = FastAPI()
 
-plugin = Plugin(DifyPluginEnv(MAX_REQUEST_TIMEOUT=120))
-plugin.add_tool(SubRemoverTool)
+# plugin = Plugin(DifyPluginEnv(MAX_REQUEST_TIMEOUT=120))
+# plugin.add_tool(SubRemoverTool)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-class UserCreate(BaseModel):
-    username: str
+# class UserCreate(BaseModel):
+#     username: str
 
-@app.post("/register/")
-async def register(user: UserCreate):
-    try:
-        new_user = register_user(user.username)
-        return {"message": "User registered", "api_key": new_user["api_key"]}
-    except Exception:
-        raise HTTPException(status_code=400, detail="User registration failed")
+# @app.post("/register/")
+# async def register(user: UserCreate):
+#     try:
+#         new_user = register_user(user.username)
+#         return {"message": "User registered", "api_key": new_user["api_key"]}
+#     except Exception:
+#         raise HTTPException(status_code=400, detail="User registration failed")
 
 @app.get("/")
 async def root():
@@ -42,14 +42,50 @@ def ensure_processed_videos_dir():
         logging.info(f"Created directory: {processed_videos_dir}")
     return processed_videos_dir
 
+@app.post("/find_subtitles/")
+async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
+    """
+    Endpoint to find subtitles in an uploaded video. Returns subtitle frame numbers and coordinates.
+    """
+    # if not api_key or not validate_api_key(api_key):
+    #     raise HTTPException(status_code=403, detail="Invalid or missing API key")
+    
+    original_filename = file.filename
+    print(f"File received: {original_filename}")
+    
+    # Save the uploaded video temporarily
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
+        temp_file.write(await file.read())
+        temp_video_path = temp_file.name
+
+    try:
+        # Initialize SubtitleDetect object
+        subtitle_detect = SubtitleDetect(temp_video_path)
+        
+        # Use find_subtitle_frame_no to extract subtitle frames and areas
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
+        
+        if not subtitle_frame_no_box_dict:
+            raise HTTPException(status_code=404, detail="No subtitles found in the video.")
+        
+        return {"message": "Subtitles found successfully.", "subtitle_frames": subtitle_frame_no_box_dict}
+    
+    except Exception as e:
+        logging.error(f"Error during subtitle detection: {e}")
+        return {"error": "Failed to detect subtitles."}
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_video_path):
+            os.remove(temp_video_path)
+
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
 async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str] = None, api_key: str = None, background_tasks: BackgroundTasks = BackgroundTasks()):
     """
     Endpoint to remove subtitles from an uploaded video. Optionally, a sub_area can be specified for subtitle region.
     """
-    if not api_key or not validate_api_key(api_key):
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+    # if not api_key or not validate_api_key(api_key):
+    #     raise HTTPException(status_code=403, detail="Invalid or missing API key")
     original_filename = file.filename
     print(f"File received: {original_filename}")
     print(f"Sub Area: {sub_area}")
@@ -78,17 +114,17 @@ def process_video(video_path: str, status_file: Path, sub_area: Optional[str], o
     try:
         logging.info(f"Starting subtitle removal for {original_filename}...")
 
-        tool_parameters = {
-            "video_path": video_path,
-            "sub_area": sub_area
-        }
+        # tool_parameters = {
+        #     "video_path": video_path,
+        #     "sub_area": sub_area
+        # }
         
         # Create an instance of the tool
-        tool = SubRemoverTool()
+        # tool = SubRemoverTool()
 
-        # Invoke the tool
-        result = next(tool._invoke(tool_parameters))  # Get the result from the tool
-        logging.info(f"Result from tool: {result['result']}")
+        # # Invoke the tool
+        # result = next(tool._invoke(tool_parameters))
+        # logging.info(f"Result from tool: {result['result']}")
 
         # Initialize the status file as "Processing..."
         with open(status_file, 'w') as file:
@@ -172,5 +208,5 @@ async def download_video(video_filename: str):
         # Return an error message if the processed video file does not exist
         return {"error": "Processed video file not found!"}
     
-if __name__ == "__main__":
-    plugin.run()
+# if __name__ == "__main__":
+#     plugin.run()
