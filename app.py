@@ -3,16 +3,11 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
-import sys
-from backend import config
 import shutil
 import tempfile
 from backend.main import SubtitleRemover, SubtitleDetect
 from typing import Optional
-import paddle
-from paddleocr.tools.infer import utility
-from paddleocr.tools.infer.predict_det import TextDetector
-import importlib
+import uvicorn
 # from dify_plugin import Plugin, DifyPluginEnv
 # from plugin.tools.sub_remover import SubRemoverTool
 # from pydantic import BaseModel
@@ -66,7 +61,7 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
 
     try:
         # Initialize SubtitleDetect object
-        subtitle_detect = SubtitleDetect(temp_video_path)
+        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
         
         # Use find_subtitle_frame_no to extract subtitle frames and areas
         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
@@ -218,5 +213,6 @@ async def download_video(video_filename: str):
         # Return an error message if the processed video file does not exist
         return {"error": "Processed video file not found!"}
     
-# if __name__ == "__main__":
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 #     plugin.run()
