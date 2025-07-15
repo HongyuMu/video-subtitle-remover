@@ -3,10 +3,16 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
+import sys
+from backend import config
 import shutil
 import tempfile
 from backend.main import SubtitleRemover, SubtitleDetect
 from typing import Optional
+import paddle
+from paddleocr.tools.infer import utility
+from paddleocr.tools.infer.predict_det import TextDetector
+import importlib
 # from dify_plugin import Plugin, DifyPluginEnv
 # from plugin.tools.sub_remover import SubRemoverTool
 # from pydantic import BaseModel
@@ -74,9 +80,13 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
         logging.error(f"Error during subtitle detection: {e}")
         return {"error": "Failed to detect subtitles."}
     finally:
-        # Clean up the temporary file
+        # Clean up the temporary file after processing
         if os.path.exists(temp_video_path):
-            os.remove(temp_video_path)
+            try:
+                os.remove(temp_video_path)
+            except PermissionError as e:
+                logging.error(f"Error deleting temp file: {e}")
+                pass
 
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
