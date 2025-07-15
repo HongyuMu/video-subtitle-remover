@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
+import cv2
 import shutil
 import tempfile
 from backend.main import SubtitleRemover, SubtitleDetect
@@ -60,16 +61,33 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
         temp_video_path = temp_file.name
 
     try:
-        # Initialize SubtitleDetect object
         subtitle_detect = SubtitleDetect(video_path=temp_video_path)
         
-        # Use find_subtitle_frame_no to extract subtitle frames and areas
+        # extract subtitle frames and areas
         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
-        
         if not subtitle_frame_no_box_dict:
             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
         
-        return {"message": "Subtitles found successfully.", "subtitle_frames": subtitle_frame_no_box_dict}
+        # Unify similar regions across frames
+        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+
+        # Filter out incorrect subtitle areas based on frequency
+        cap = cv2.VideoCapture(temp_video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        cap.release()
+        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
+
+        # The first entry returns the detected subtitle
+        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        
+        # Return final results after all processing steps
+        return {
+            "message": "Subtitles found successfully.",
+            "subtitle_frames": first_entry_dict,
+            "continuous_frame_intervals": sub_frame_no_list_continuous
+        }
     
     except Exception as e:
         logging.error(f"Error during subtitle detection: {e}")
