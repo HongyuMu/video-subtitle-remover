@@ -32,108 +32,9 @@ class SubtitleDetect:
     文本框检测类，用于检测视频帧中是否存在文本框
     """
 
-    def __init__(self, video_path, sub_area=None, use_gpu=True, use_xpu=False, use_npu=False, use_mlu=False, 
-                 use_gcu=False, ir_optim=True, use_tensorrt=False, min_subgraph_size=15, precision="fp32", 
-                 gpu_mem=500, gpu_id=0, det_algorithm="DB", det_model_dir=None, det_limit_side_len=960, 
-                 det_limit_type="max", det_box_type="quad", det_db_thresh=0.3, det_db_box_thresh=0.6, 
-                 det_db_unclip_ratio=1.5, max_batch_size=10, use_dilation=False, det_db_score_mode="fast",
-                 det_east_score_thresh=0.8, det_east_cover_thresh=0.1, det_east_nms_thresh=0.2, 
-                 det_sast_score_thresh=0.5, det_sast_nms_thresh=0.2, det_pse_thresh=0, det_pse_box_thresh=0.85, 
-                 det_pse_min_area=16, det_pse_scale=1, scales=[8, 16, 32], alpha=1.0, beta=1.0, 
-                 fourier_degree=5, rec_algorithm="SVTR_LCNet", rec_model_dir=None, rec_image_inverse=True, 
-                 rec_image_shape="3, 48, 320", rec_batch_num=6, max_text_length=25, rec_char_dict_path="./ppocr/utils/ppocr_keys_v1.txt", 
-                 use_space_char=True, vis_font_path="./doc/fonts/simfang.ttf", drop_score=0.5, 
-                 e2e_algorithm="PGNet", e2e_model_dir=None, e2e_limit_side_len=768, e2e_limit_type="max", 
-                 e2e_pgnet_score_thresh=0.5, e2e_char_dict_path="./ppocr/utils/ic15_dict.txt", 
-                 e2e_pgnet_valid_set="totaltext", e2e_pgnet_mode="fast", use_angle_cls=False, cls_model_dir=None, 
-                 cls_image_shape="3, 48, 192", label_list=["0", "180"], cls_batch_num=6, cls_thresh=0.9, 
-                 enable_mkldnn=None, cpu_threads=10, use_pdserving=False, warmup=False, sr_model_dir=None, 
-                 sr_image_shape="3, 32, 128", sr_batch_num=1, draw_img_save_dir="./inference_results", 
-                 save_crop_res=False, crop_res_save_dir="./output", use_mp=False, total_process_num=1, 
-                 process_id=0, benchmark=False, save_log_path="./log_output/", show_log=True, use_onnx=False, 
-                 onnx_providers=None, onnx_sess_options=None, return_word_box=False):
-        
+    def __init__(self, video_path, sub_area=None):
         self.video_path = video_path
         self.sub_area = sub_area
-        self.use_gpu = use_gpu
-        self.use_xpu = use_xpu
-        self.use_npu = use_npu
-        self.use_mlu = use_mlu
-        self.use_gcu = use_gcu
-        self.ir_optim = ir_optim
-        self.use_tensorrt = use_tensorrt
-        self.min_subgraph_size = min_subgraph_size
-        self.precision = precision
-        self.gpu_mem = gpu_mem
-        self.gpu_id = gpu_id
-        self.det_algorithm = det_algorithm
-        self.det_model_dir = det_model_dir
-        self.det_limit_side_len = det_limit_side_len
-        self.det_limit_type = det_limit_type
-        self.det_box_type = det_box_type
-        self.det_db_thresh = det_db_thresh
-        self.det_db_box_thresh = det_db_box_thresh
-        self.det_db_unclip_ratio = det_db_unclip_ratio
-        self.max_batch_size = max_batch_size
-        self.use_dilation = use_dilation
-        self.det_db_score_mode = det_db_score_mode
-        self.det_east_score_thresh = det_east_score_thresh
-        self.det_east_cover_thresh = det_east_cover_thresh
-        self.det_east_nms_thresh = det_east_nms_thresh
-        self.det_sast_score_thresh = det_sast_score_thresh
-        self.det_sast_nms_thresh = det_sast_nms_thresh
-        self.det_pse_thresh = det_pse_thresh
-        self.det_pse_box_thresh = det_pse_box_thresh
-        self.det_pse_min_area = det_pse_min_area
-        self.det_pse_scale = det_pse_scale
-        self.scales = scales
-        self.alpha = alpha
-        self.beta = beta
-        self.fourier_degree = fourier_degree
-        self.rec_algorithm = rec_algorithm
-        self.rec_model_dir = rec_model_dir
-        self.rec_image_inverse = rec_image_inverse
-        self.rec_image_shape = rec_image_shape
-        self.rec_batch_num = rec_batch_num
-        self.max_text_length = max_text_length
-        self.rec_char_dict_path = rec_char_dict_path
-        self.use_space_char = use_space_char
-        self.vis_font_path = vis_font_path
-        self.drop_score = drop_score
-        self.e2e_algorithm = e2e_algorithm
-        self.e2e_model_dir = e2e_model_dir
-        self.e2e_limit_side_len = e2e_limit_side_len
-        self.e2e_limit_type = e2e_limit_type
-        self.e2e_pgnet_score_thresh = e2e_pgnet_score_thresh
-        self.e2e_char_dict_path = e2e_char_dict_path
-        self.e2e_pgnet_valid_set = e2e_pgnet_valid_set
-        self.e2e_pgnet_mode = e2e_pgnet_mode
-        self.use_angle_cls = use_angle_cls
-        self.cls_model_dir = cls_model_dir
-        self.cls_image_shape = cls_image_shape
-        self.label_list = label_list
-        self.cls_batch_num = cls_batch_num
-        self.cls_thresh = cls_thresh
-        self.enable_mkldnn = enable_mkldnn
-        self.cpu_threads = cpu_threads
-        self.use_pdserving = use_pdserving
-        self.warmup = warmup
-        self.sr_model_dir = sr_model_dir
-        self.sr_image_shape = sr_image_shape
-        self.sr_batch_num = sr_batch_num
-        self.draw_img_save_dir = draw_img_save_dir
-        self.save_crop_res = save_crop_res
-        self.crop_res_save_dir = crop_res_save_dir
-        self.use_mp = use_mp
-        self.total_process_num = total_process_num
-        self.process_id = process_id
-        self.benchmark = benchmark
-        self.save_log_path = save_log_path
-        self.show_log = show_log
-        self.use_onnx = use_onnx
-        self.onnx_providers = onnx_providers
-        self.onnx_sess_options = onnx_sess_options
-        self.return_word_box = return_word_box
 
     @cached_property
     def text_detector(self):
@@ -141,12 +42,13 @@ class SubtitleDetect:
         paddle.disable_signal_handler()
         from paddleocr.tools.infer import utility
         from paddleocr.tools.infer.predict_det import TextDetector
-        args = {
-            "det_algorithm": self.det_algorithm,
-            "det_model_dir": self.det_model_dir,
-            "use_onnx": self.use_onnx,
-            "onnx_providers": self.onnx_providers,
-        }
+        # 获取参数对象
+        importlib.reload(config)
+        args = utility.parse_args()
+        args.det_algorithm = 'DB'
+        args.det_model_dir = self.convertToOnnxModelIfNeeded(config.DET_MODEL_PATH)
+        args.use_onnx=len(config.ONNX_PROVIDERS) > 0
+        args.onnx_providers=config.ONNX_PROVIDERS
         return TextDetector(args)
 
     def detect_subtitle(self, img):
