@@ -81,7 +81,11 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
         # The first entry returns the detected subtitle
         first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
         sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
-        
+
+        clustered_output = dict()
+        for interval in sub_frame_no_list_continuous:
+            clustered_output[interval] = first_entry_dict[interval[0]]
+
         # Return final results after all processing steps
         return {
             "message": "Subtitles found successfully.",
