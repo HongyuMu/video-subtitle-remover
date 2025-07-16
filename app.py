@@ -44,6 +44,22 @@ def ensure_processed_videos_dir():
         logging.info(f"Created directory: {processed_videos_dir}")
     return processed_videos_dir
 
+def get_coordinates_for_first_frame(distinct_elapses, frame_dict):
+    coordinates = []
+
+    # Extract the starting frame number from each tuple in distinct_elapses
+    for elapse in distinct_elapses:
+        first_frame = elapse[0]
+        
+        # Get the coordinates for the starting frame number
+        if first_frame in frame_dict:
+            coordinates.append(frame_dict[first_frame])
+        else:
+            # print("unmatched")
+            coordinates.append(None)  # If no coordinates found for this frame
+
+    return coordinates
+
 @app.post("/find_subtitles/")
 async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
     """
@@ -82,15 +98,12 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
         first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
         sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
 
-        clustered_output = dict()
-        for interval in sub_frame_no_list_continuous:
-            clustered_output[interval] = first_entry_dict[interval[0]]
-
+        distinct_coords = get_coordinates_for_first_frame(sub_frame_no_list_continuous, first_entry_dict)
         # Return final results after all processing steps
         return {
             "message": "Subtitles found successfully.",
-            "subtitle_frames": first_entry_dict,
-            "continuous_frame_intervals": sub_frame_no_list_continuous
+            "subtitle_frames with coordinates": distinct_coords,
+            "distinct_elapses": sub_frame_no_list_continuous
         }
     
     except Exception as e:
