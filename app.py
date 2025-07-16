@@ -150,20 +150,6 @@ async def find_subtitles(file: UploadFile = File(...), download_at: str = None):
                 logging.error(f"Error deleting temp file: {e}")
                 pass
 
-# Endpoint to fetch the processed JSON file
-@app.get("/download_json/{json_filename}")
-async def download_json(json_filename: str):
-    processed_files_dir = ensure_processed_files_dir()
-    
-    # Construct the full path to the processed JSON file
-    json_path = processed_files_dir / json_filename
-    
-    if json_path.exists():
-        # Return the processed JSON file to the user as a download
-        return FileResponse(json_path, media_type="application/json", filename=json_filename)
-    else:
-        raise HTTPException(status_code=404, detail="Processed JSON file not found!")
-
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
 async def remove_subtitles(file: UploadFile = File(...), sub_area: Optional[str] = None, api_key: str = None, background_tasks: BackgroundTasks = BackgroundTasks()):
