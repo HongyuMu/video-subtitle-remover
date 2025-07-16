@@ -547,7 +547,7 @@ class SubtitleDetect:
         sub_area_with_frequency = self.get_frequency_in_range(sub_frame_no_list_continuous, subtitle_frame_no_box_dict)
         correct_sub_area = []
         for sub_area in sub_area_with_frequency.keys():
-            if sub_area_with_frequency[sub_area] >= (fps // 2):
+            if sub_area_with_frequency[sub_area] >= (fps // 10):
                 correct_sub_area.append(sub_area)
             else:
                 print(f'drop {sub_area}')
