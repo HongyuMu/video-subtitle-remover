@@ -3,6 +3,7 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 import logging
 import os
+import json
 import cv2
 import shutil
 import tempfile
@@ -44,6 +45,12 @@ def ensure_processed_videos_dir():
         logging.info(f"Created directory: {processed_videos_dir}")
     return processed_videos_dir
 
+def ensure_processed_files_dir():
+    processed_dir = Path("processed_files")
+    if not processed_dir.exists():
+        processed_dir.mkdir(parents=True)
+    return processed_dir
+
 def get_coordinates_for_first_frame(distinct_elapses, frame_dict):
     coordinates = []
 
@@ -61,13 +68,11 @@ def get_coordinates_for_first_frame(distinct_elapses, frame_dict):
     return coordinates
 
 @app.post("/find_subtitles/")
-async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
+async def find_subtitles(file: UploadFile = File(...), download_at: str = None):
     """
-    Endpoint to find subtitles in an uploaded video. Returns subtitle frame numbers and coordinates.
+    Endpoint to find subtitles in an uploaded video. Returns subtitle frame numbers and coordinates as a json file.
+    Please select the location where you want to save the json file.
     """
-    # if not api_key or not validate_api_key(api_key):
-    #     raise HTTPException(status_code=403, detail="Invalid or missing API key")
-    
     original_filename = file.filename
     print(f"File received: {original_filename}")
     
@@ -75,6 +80,12 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
     with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as temp_file:
         temp_file.write(await file.read())
         temp_video_path = temp_file.name
+
+    video_directory = os.path.dirname(original_filename)
+
+    # If the user didn't specify a download directory, use the video file's directory
+    if not download_at:
+        download_at = video_directory
 
     try:
         subtitle_detect = SubtitleDetect(video_path=temp_video_path)
@@ -100,15 +111,36 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
 
         distinct_coords = get_coordinates_for_first_frame(sub_frame_no_list_continuous, first_entry_dict)
         # Return final results after all processing steps
-        return {
-            "message": "Subtitles found successfully.",
-            "subtitle_frames with coordinates": distinct_coords,
-            "distinct_elapses": sub_frame_no_list_continuous
+        json_content = {
+            "distinct_coordinates": distinct_coords,
+            "frame_intervals": sub_frame_no_list_continuous
         }
+
+        processed_files_dir = ensure_processed_files_dir()
+
+        # If download_at was specified, use it, otherwise save to processed_files_dir
+        if download_at:
+            # Make sure the user-specified directory exists
+            download_at = Path(download_at)
+            if not download_at.exists():
+                os.makedirs(download_at)
+            json_file_path = download_at / "subtitles_data.json"
+        else:
+            json_file_path = processed_files_dir / "subtitles_data.json"
+        
+        with open(json_file_path, "w") as json_file:
+            json.dump(json_content, json_file, indent=4)
+
+        # Copy the JSON file to the original video directory using shutil.copy
+        final_json_path = Path(video_directory) / "subtitles_data.json"
+        shutil.copy(json_file_path, final_json_path)
+
+        # Return the JSON file for download
+        return FileResponse(json_file_path, media_type="application/json", filename="subtitles_data.json")
     
     except Exception as e:
-        logging.error(f"Error during subtitle detection: {e}")
-        return {"error": "Failed to detect subtitles."}
+        logging.error(f"Error during finding subtitles: {e}")
+        return {"error": f"{e}"}
     finally:
         # Clean up the temporary file after processing
         if os.path.exists(temp_video_path):
@@ -117,6 +149,20 @@ async def find_subtitles(file: UploadFile = File(...), api_key: str = None):
             except PermissionError as e:
                 logging.error(f"Error deleting temp file: {e}")
                 pass
+
+# Endpoint to fetch the processed JSON file
+@app.get("/download_json/{json_filename}")
+async def download_json(json_filename: str):
+    processed_files_dir = ensure_processed_files_dir()
+    
+    # Construct the full path to the processed JSON file
+    json_path = processed_files_dir / json_filename
+    
+    if json_path.exists():
+        # Return the processed JSON file to the user as a download
+        return FileResponse(json_path, media_type="application/json", filename=json_filename)
+    else:
+        raise HTTPException(status_code=404, detail="Processed JSON file not found!")
 
 # Endpoint for video upload and subtitle removal
 @app.post("/remove_subtitles/")
