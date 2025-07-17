@@ -132,8 +132,8 @@ async def find_subtitles(file: UploadFile = File(...), download_at: str = None):
             json.dump(json_content, json_file, indent=4)
 
         # Copy the JSON file to the original video directory using shutil.copy
-        final_json_path = Path(video_directory) / "subtitles_data.json"
-        shutil.copy(json_file_path, final_json_path)
+        # final_json_path = Path(video_directory) / f"{original_filename}_subtitles.json"
+        # shutil.copy(json_file_path, final_json_path)
 
         # Return the JSON file for download
         return FileResponse(json_file_path, media_type="application/json", filename="subtitles_data.json")
