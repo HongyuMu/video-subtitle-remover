@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import cv2
 import sys
+import json
 from functools import cached_property
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -563,11 +564,12 @@ class SubtitleDetect:
 
 
 class SubtitleRemover:
-    def __init__(self, vd_path, distinct_coords=None, frame_intervals=None, gui_mode=False):
+    def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
         importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置
+        self.sub_area = sub_area
         self.distinct_coords = distinct_coords
         # 用户指定的字幕区域对应的帧数范围
         self.frame_intervals = frame_intervals
@@ -790,19 +792,37 @@ class SubtitleRemover:
 
     def sttn_mode_with_no_detection(self, tbar):
         """
-        使用sttn对选中区域进行重绘，不进行字幕检测
+        Use STTN to repaint selected areas without subtitle detection
+        (with distinct coordinates for each subtitle area).
         """
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
-        if self.sub_area is not None:
-            xmin, xmax, ymin, ymax = self.sub_area
-        else:
-            print('[Info] No subtitle area has been set. Video will be processed in full screen. As a result, the final outcome might be suboptimal.')
-            xmin, xmax, ymin, ymax = 0, self.frame_width, 0, self.frame_height
-        mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-        mask = create_mask(self.mask_size, mask_area_coordinates)
+        
+        # Initialize STTNVideoInpaint once outside the loop
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
-        sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
+        
+        # Loop through each pair of frame interval and corresponding subtitle area
+        for (start_frame, end_frame), sub_area in zip(self.frame_intervals, self.distinct_coords):
+            print(f"Processing frames from {start_frame} to {end_frame} with subtitle area: {sub_area}")
+            
+            frames_to_process = []
+            
+            # Read frames within the current interval
+            for frame_no in range(start_frame, end_frame + 1):
+                ret, frame = self.video_cap.read()
+                if not ret:
+                    break
+                frames_to_process.append(frame)
+            
+            # Create a mask for the current subtitle area (sub_area)
+            mask = create_mask(self.mask_size, [sub_area])
+            
+            # Apply inpainting for the current interval and subtitle area
+            for batch in batch_generator(frames_to_process, config.STTN_MAX_LOAD_NUM):
+                sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
+
+            # Update progress after processing the current interval
+            self.update_progress(tbar, increment=len(frames_to_process))
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
@@ -941,9 +961,9 @@ class SubtitleRemover:
         if not self.is_picture:
             # 将原音频合并到新生成的视频文件中
             self.merge_audio_to_video()
-            print(f"[Finished]Subtitle successfully removed, video generated at：{self.video_out_name}")
+            print(f"[Finished]Subtitle successfully removed, video generated at: {self.video_out_name}")
         else:
-            print(f"[Finished]Subtitle successfully removed, picture generated at：{self.video_out_name}")
+            print(f"[Finished]Subtitle successfully removed, picture generated at: {self.video_out_name}")
         print(f'time cost: {round(time.time() - start_time, 2)}s')
         self.isFinished = True
         self.progress_total = 100
@@ -1010,7 +1030,28 @@ if __name__ == '__main__':
     # sub_area = (ymin, ymax, xmin, xmax)
     # 3. 新建字幕提取对象
     if is_video_or_image(video_path):
-        sd = SubtitleRemover(video_path, sub_area=None)
-        sd.run()
+        json_path = input("Please input the JSON file path containing distinct_coords and frame_intervals: ").strip()
+        
+        # Read the JSON file
+        try:
+            with open(json_path, 'r') as f:
+                json_data = json.load(f)
+            
+            # Extract distinct_coords and frame_intervals from the JSON data
+            coords = json_data.get("distinct_coordinates")
+            intervals = json_data.get("frame_intervals")
+            
+            if not coords or not intervals:
+                raise ValueError("The JSON file must contain 'distinct_coordinates' and 'frame_intervals'.")
+            
+            sd = SubtitleRemover(video_path, sub_area=None, distinct_coords=coords, frame_intervals=intervals)
+            sd.run()
+        except FileNotFoundError:
+            print(f"Error: The file '{json_path}' was not found.")
+        except json.JSONDecodeError:
+            print(f"Error: The file '{json_path}' is not a valid JSON file.")
+        except ValueError as e:
+            print(f"Error: {e}")
+
     else:
         print(f'Invalid video path: {video_path}')
