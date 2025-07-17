@@ -676,35 +676,6 @@ class SubtitleRemover:
         self.progress_remover = int(current_percentage) // 2
         self.progress_total = 50 + self.progress_remover
 
-    # def process_intervals(self, tbar):
-    #     """
-    #     Processes the video frames based on the provided frame intervals.
-    #     """
-    #     print('[Processing] start removing subtitles...')
-    #     for start_frame, end_frame in self.frame_intervals:
-    #         print(f"Processing frames from {start_frame} to {end_frame}")
-            
-    #         # Initialize list to hold frames for inpainting
-    #         frames_to_process = []
-
-    #         # Read frames within the current interval
-    #         for frame_no in range(start_frame, end_frame + 1):
-    #             ret, frame = self.video_cap.read()
-    #             if not ret:
-    #                 break
-    #             frames_to_process.append(frame)
-
-    #         # If there are frames to process, proceed with subtitle removal
-    #         if frames_to_process:
-    #             mask = create_mask(self.mask_size, self.sub_area)
-    #             for frame in frames_to_process:
-    #                 # Perform inpainting
-    #                 inpainted_frame = self.lama_inpaint(frame, mask) if self.lama_inpaint else frame
-    #                 self.video_writer.write(inpainted_frame)
-    #                 self.update_progress(tbar, increment=1)
-    #                 if self.gui_mode:
-    #                     self.preview_frame = cv2.hconcat([frame, inpainted_frame])
-
     def propainter_mode(self, tbar):
         print('use propainter mode')
         sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
@@ -807,7 +778,7 @@ class SubtitleRemover:
 
             # Call the inpaint function with frame interval and subtitle area
             inpainted_frames = sttn_video_inpaint(input_mask=None, input_sub_remover=self, tbar=tbar,
-                                                frame_interval=(start_frame, end_frame), sub_area=sub_area)
+                                                frame_intervals=(start_frame, end_frame), subtitle_coords=sub_area)
 
             # Update progress after processing the current interval
             self.update_progress(tbar, increment=end_frame - start_frame + 1)
