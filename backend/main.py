@@ -563,12 +563,14 @@ class SubtitleDetect:
 
 
 class SubtitleRemover:
-    def __init__(self, vd_path, sub_area=None, gui_mode=False):
+    def __init__(self, vd_path, distinct_coords=None, frame_intervals=None, gui_mode=False):
         importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置
-        self.sub_area = sub_area
+        self.distinct_coords = distinct_coords
+        # 用户指定的字幕区域对应的帧数范围
+        self.frame_intervals = frame_intervals
         # 是否为gui运行，gui运行需要显示预览
         self.gui_mode = gui_mode
         # 判断是否为图片
@@ -672,6 +674,35 @@ class SubtitleRemover:
         self.progress_remover = int(current_percentage) // 2
         self.progress_total = 50 + self.progress_remover
 
+    # def process_intervals(self, tbar):
+    #     """
+    #     Processes the video frames based on the provided frame intervals.
+    #     """
+    #     print('[Processing] start removing subtitles...')
+    #     for start_frame, end_frame in self.frame_intervals:
+    #         print(f"Processing frames from {start_frame} to {end_frame}")
+            
+    #         # Initialize list to hold frames for inpainting
+    #         frames_to_process = []
+
+    #         # Read frames within the current interval
+    #         for frame_no in range(start_frame, end_frame + 1):
+    #             ret, frame = self.video_cap.read()
+    #             if not ret:
+    #                 break
+    #             frames_to_process.append(frame)
+
+    #         # If there are frames to process, proceed with subtitle removal
+    #         if frames_to_process:
+    #             mask = create_mask(self.mask_size, self.sub_area)
+    #             for frame in frames_to_process:
+    #                 # Perform inpainting
+    #                 inpainted_frame = self.lama_inpaint(frame, mask) if self.lama_inpaint else frame
+    #                 self.video_writer.write(inpainted_frame)
+    #                 self.update_progress(tbar, increment=1)
+    #                 if self.gui_mode:
+    #                     self.preview_frame = cv2.hconcat([frame, inpainted_frame])
+
     def propainter_mode(self, tbar):
         print('use propainter mode')
         sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
@@ -764,10 +795,10 @@ class SubtitleRemover:
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
         if self.sub_area is not None:
-            ymin, ymax, xmin, xmax = self.sub_area
+            xmin, xmax, ymin, ymax = self.sub_area
         else:
             print('[Info] No subtitle area has been set. Video will be processed in full screen. As a result, the final outcome might be suboptimal.')
-            ymin, ymax, xmin, xmax = 0, self.frame_height, 0, self.frame_width
+            xmin, xmax, ymin, ymax = 0, self.frame_width, 0, self.frame_height
         mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
         mask = create_mask(self.mask_size, mask_area_coordinates)
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
