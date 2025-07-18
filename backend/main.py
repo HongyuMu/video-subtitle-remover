@@ -771,8 +771,8 @@ class SubtitleRemover:
         
         # Initialize STTNVideoInpaint once outside the loop
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
-        for coords in self.distinct_coords:
-            mask = create_mask(self.mask_size, coords=coords)
+        for i in range(len(self.frame_intervals)):
+            mask = create_mask(self.mask_size, coords=self.distinct_coords[i])
         
         # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
             sttn_video_inpaint(

@@ -220,7 +220,7 @@ class STTNVideoInpaint:
             else:
                 _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
                 mask = mask[:, :, None]
-
+            
             if mask is None:
                 print("Error: Mask is None. Could not read or generate the mask.")
                 return None
@@ -284,6 +284,8 @@ class STTNVideoInpaint:
                             original_frame = None
                             
                         frame = frames_hr[j]
+                        mask_area = mask[y_min:y_max, x_min:x_max, :]
+                        # print("Updated mask:", mask_area.shape)
                         
                         for k in range(len(subtitle_coords)):
                             if j < len(comps[k]):  # 确保索引有效
@@ -292,8 +294,6 @@ class STTNVideoInpaint:
                                 sub_width = x_max - x_min
                                 comp = cv2.resize(comps[k][j], (sub_width, sub_height))
                                 comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                                mask_area = mask[y_min:y_max, x_min:x_max, :]
-                                print("Updated mask:", mask_area.shape)
                                 frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
                         
                         writer.write(frame)
