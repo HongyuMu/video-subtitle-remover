@@ -769,19 +769,15 @@ class SubtitleRemover:
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
         
+        mask = create_mask(self.mask_size, self.distinct_coords)
         # Initialize STTNVideoInpaint once outside the loop
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
         
-        # Loop through each pair of frame interval and corresponding subtitle area
-        for (start_frame, end_frame), sub_area in zip(self.frame_intervals, self.distinct_coords):
-            print(f"Processing frames from {start_frame} to {end_frame} with subtitle area: {sub_area}")
-
-            # Call the inpaint function with frame interval and subtitle area
-            inpainted_frames = sttn_video_inpaint(input_mask=None, input_sub_remover=self, tbar=tbar,
-                                                frame_intervals=(start_frame, end_frame), subtitle_coords=sub_area)
-
-            # Update progress after processing the current interval
-            self.update_progress(tbar, increment=end_frame - start_frame + 1)
+        # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
+        sttn_video_inpaint(
+            input_mask=mask, input_sub_remover=self, tbar=tbar, 
+            frame_intervals=self.frame_intervals, subtitle_coords=self.distinct_coords
+            )
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
@@ -893,10 +889,6 @@ class SubtitleRemover:
         self.progress_total = 0
         tbar = tqdm(total=int(self.frame_count), unit='frame', position=0, file=sys.__stdout__,
                     desc='Subtitle Removing')
-        
-        # Manually initialize tbar to avoid the frame finding process
-        total_frames = sum(end - start + 1 for start, end in self.frame_intervals)
-        tbar.total = total_frames
         
         if self.is_picture:
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)

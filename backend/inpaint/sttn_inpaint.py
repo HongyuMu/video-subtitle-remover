@@ -166,63 +166,6 @@ class STTNInpaint:
         # 返回处理完成的帧序列
         return comp_frames
 
-    # @staticmethod
-    # def get_inpaint_area_by_mask(H, h, mask):
-    #     """
-    #     获取字幕去除区域，根据mask来确定需要填补的区域和高度
-    #     """
-    #     # 存储绘画区域的列表
-    #     inpaint_area = []
-    #     # 从视频底部的字幕位置开始，假设字幕通常位于底部
-    #     to_H = from_H = H
-    #     # 从底部向上遍历遮罩
-    #     while from_H != 0:
-    #         if to_H - h < 0:
-    #             # 如果下一段会超出顶端，则从顶端开始
-    #             from_H = 0
-    #             to_H = h
-    #         else:
-    #             # 确定段的上边界
-    #             from_H = to_H - h
-    #         # 检查当前段落是否包含遮罩像素
-    #         if not np.all(mask[from_H:to_H, :] == 0) and np.sum(mask[from_H:to_H, :]) > 10:
-    #             # 如果不是第一个段落，向下移动以确保没遗漏遮罩区域
-    #             if to_H != H:
-    #                 move = 0
-    #                 while to_H + move < H and not np.all(mask[to_H + move, :] == 0):
-    #                     move += 1
-    #                 # 确保没有越过底部
-    #                 if to_H + move < H and move < h:
-    #                     to_H += move
-    #                     from_H += move
-    #             # 将该段落添加到列表中
-    #             if (from_H, to_H) not in inpaint_area:
-    #                 inpaint_area.append((from_H, to_H))
-    #             else:
-    #                 break
-    #         # 移动到下一个段落
-    #         to_H -= h
-    #     return inpaint_area  # 返回绘画区域列表
-
-    # @staticmethod
-    # def get_inpaint_area_by_selection(input_sub_area, mask):
-    #     print('use selection area for inpainting')
-    #     height, width = mask.shape[:2]
-    #     ymin, ymax, _, _ = input_sub_area
-    #     interval_size = 135
-    #     # 存储结果的列表
-    #     inpaint_area = []
-    #     # 计算并存储标准区间
-    #     for i in range(ymin, ymax, interval_size):
-    #         inpaint_area.append((i, i + interval_size))
-    #     # 检查最后一个区间是否达到了最大值
-    #     if inpaint_area[-1][1] != ymax:
-    #         # 如果没有，则创建一个新的区间，开始于最后一个区间的结束，结束于扩大后的值
-    #         if inpaint_area[-1][1] + interval_size <= height:
-    #             inpaint_area.append((inpaint_area[-1][1], inpaint_area[-1][1] + interval_size))
-    #     return inpaint_area  # 返回绘画区域列表
-
-
 class STTNVideoInpaint:
 
     def read_frame_info_from_video(self):
@@ -278,6 +221,12 @@ class STTNVideoInpaint:
             else:
                 _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
                 mask = mask[:, :, None]
+
+            if mask is None:
+                print("Error: Mask is None. Could not read or generate the mask.")
+                return None
+            else:
+                print(f"Mask is created with shape {mask[:2]}.")
             
             # 遍历每一次的迭代次数
             for i in range(rec_time):
@@ -306,6 +255,9 @@ class STTNVideoInpaint:
                     
                     for k in range(len(subtitle_coords)):
                         subtitle_region = self.get_subtitle_region_for_frame(subtitle_coords, frame_intervals, j)
+                        if subtitle_region is None:
+                            print(f"Warning: No subtitle region found for frame {j}. Skipping this frame.")
+                            continue
                         x_min, x_max, y_min, y_max = subtitle_region
                         # 裁剪、缩放并添加到帧字典
                         image_crop = image[y_min:y_max, x_min:x_max, :]
