@@ -255,7 +255,7 @@ class STTNVideoInpaint:
         else:
             self.clip_gap = clip_gap
 
-    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None):
+    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None, frame_intervals=None, subtitle_coords=None):
         reader = None
         writer = None
         try:
@@ -278,9 +278,6 @@ class STTNVideoInpaint:
             else:
                 _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
                 mask = mask[:, :, None]
-                
-            # 得到修复区域位置
-            inpaint_area = self.sttn_inpaint.get_inpaint_area_by_mask(frame_info['H_ori'], split_h, mask)
             
             # 遍历每一次的迭代次数
             for i in range(rec_time):
@@ -293,7 +290,7 @@ class STTNVideoInpaint:
                 comps = {}  # 组合字典，用于存储修复后的图像
                 
                 # 初始化帧字典
-                for k in range(len(inpaint_area)):
+                for k in range(len(subtitle_coords)):
                     frames[k] = []
                     
                 # 读取和修复高分辨率帧
@@ -307,9 +304,11 @@ class STTNVideoInpaint:
                     frames_hr.append(image)
                     valid_frames_count += 1
                     
-                    for k in range(len(inpaint_area)):
+                    for k in range(len(subtitle_coords)):
+                        subtitle_region = self.get_subtitle_region_for_frame(subtitle_coords, frame_intervals, j)
+                        x_min, x_max, y_min, y_max = subtitle_region
                         # 裁剪、缩放并添加到帧字典
-                        image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]
+                        image_crop = image[y_min:y_max, x_min:x_max, :]
                         image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
                         frames[k].append(image_resize)
                 
@@ -319,14 +318,14 @@ class STTNVideoInpaint:
                     continue
                     
                 # 对每个修复区域运行修复
-                for k in range(len(inpaint_area)):
+                for k in range(len(subtitle_coords)):
                     if len(frames[k]) > 0:  # 确保有帧可以处理
                         comps[k] = self.sttn_inpaint.inpaint(frames[k])
                     else:
                         comps[k] = []
                 
                 # 如果有要修复的区域
-                if inpaint_area and valid_frames_count > 0:
+                if subtitle_coords and valid_frames_count > 0:
                     for j in range(valid_frames_count):
                         if input_sub_remover is not None and input_sub_remover.gui_mode:
                             original_frame = copy.deepcopy(frames_hr[j])
@@ -335,13 +334,14 @@ class STTNVideoInpaint:
                             
                         frame = frames_hr[j]
                         
-                        for k in range(len(inpaint_area)):
+                        for k in range(len(subtitle_coords)):
                             if j < len(comps[k]):  # 确保索引有效
                                 # 将修复的图像重新扩展到原始分辨率，并融合到原始帧
                                 comp = cv2.resize(comps[k][j], (frame_info['W_ori'], split_h))
                                 comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                                mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
-                                frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
+                                x_min, x_max, y_min, y_max = subtitle_coords[k]
+                                mask_area = mask[y_min:y_max, x_min:x_max, :]
+                                frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
                         
                         writer.write(frame)
                         
@@ -356,6 +356,19 @@ class STTNVideoInpaint:
         finally:
             if writer:
                 writer.release()
+
+    def get_subtitle_region_for_frame(self, subtitle_coords, frame_intervals, frame_idx):
+        """
+        Get the subtitle region for a given frame based on the provided subtitle coordinates
+        and frame intervals.
+
+        :return: The subtitle region [x_min, x_max, y_min, y_max] for the current frame
+        """
+        for i, (start_frame, end_frame) in enumerate(frame_intervals):
+            if start_frame <= frame_idx <= end_frame:
+                # Return the subtitle coordinates for the current frame's interval
+                return subtitle_coords[i]
+        return None
 
 
 if __name__ == '__main__':
