@@ -213,7 +213,6 @@ class STTNVideoInpaint:
             # 计算需要迭代修复视频的次数
             rec_time = frame_info['len'] // self.clip_gap if frame_info['len'] % self.clip_gap == 0 else frame_info['len'] // self.clip_gap + 1
             # 计算分割高度，用于确定修复区域的大小
-            split_h = int(frame_info['W_ori'] * 3 / 16)
             
             if input_mask is None:
                 # 读取掩码
@@ -226,7 +225,7 @@ class STTNVideoInpaint:
                 print("Error: Mask is None. Could not read or generate the mask.")
                 return None
             else:
-                print(f"Mask is created with shape {mask[:2]}.")
+                print(f"Mask is created with shape {mask.shape}.")
             
             # 遍历每一次的迭代次数
             for i in range(rec_time):
@@ -289,9 +288,10 @@ class STTNVideoInpaint:
                         for k in range(len(subtitle_coords)):
                             if j < len(comps[k]):  # 确保索引有效
                                 # 将修复的图像重新扩展到原始分辨率，并融合到原始帧
-                                comp = cv2.resize(comps[k][j], (frame_info['W_ori'], split_h))
+                                sub_height = y_max - y_min
+                                sub_width = x_max - x_min
+                                comp = cv2.resize(comps[k][j], (sub_width, sub_height))
                                 comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                                x_min, x_max, y_min, y_max = subtitle_coords[k]
                                 mask_area = mask[y_min:y_max, x_min:x_max, :]
                                 frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
                         

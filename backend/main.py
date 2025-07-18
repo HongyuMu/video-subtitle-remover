@@ -769,15 +769,16 @@ class SubtitleRemover:
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
         
-        mask = create_mask(self.mask_size, self.distinct_coords)
         # Initialize STTNVideoInpaint once outside the loop
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
+        for coords in self.distinct_coords:
+            mask = create_mask(self.mask_size, coords=coords)
         
         # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
-        sttn_video_inpaint(
-            input_mask=mask, input_sub_remover=self, tbar=tbar, 
-            frame_intervals=self.frame_intervals, subtitle_coords=self.distinct_coords
-            )
+            sttn_video_inpaint(
+                input_mask=mask, input_sub_remover=self, tbar=tbar, 
+                frame_intervals=self.frame_intervals, subtitle_coords=self.distinct_coords
+                )
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
@@ -996,6 +997,8 @@ if __name__ == '__main__':
             # Extract distinct_coords and frame_intervals from the JSON data
             coords = json_data.get("distinct_coordinates")
             intervals = json_data.get("frame_intervals")
+            # include the 0th frame to avoid OpenCV error
+            intervals[0][0] = 0
             
             if not coords or not intervals:
                 raise ValueError("The JSON file must contain 'distinct_coordinates' and 'frame_intervals'.")
