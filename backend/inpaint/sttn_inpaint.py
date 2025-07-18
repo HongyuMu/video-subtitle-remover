@@ -187,6 +187,7 @@ class STTNVideoInpaint:
         # 视频和掩码路径
         self.video_path = video_path
         self.mask_path = mask_path
+        frame_counter = 0
         # 设置输出视频文件的路径
         self.video_out_path = os.path.join(
             os.path.dirname(os.path.abspath(self.video_path)),
@@ -198,7 +199,7 @@ class STTNVideoInpaint:
         else:
             self.clip_gap = clip_gap
 
-    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None, frame_intervals=None, subtitle_coords=None):
+    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None, frame_interval=None, subtitle_coord=None):
         reader = None
         writer = None
         try:
@@ -211,8 +212,11 @@ class STTNVideoInpaint:
                 writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
             
             # 计算需要迭代修复视频的次数
-            rec_time = frame_info['len'] // self.clip_gap if frame_info['len'] % self.clip_gap == 0 else frame_info['len'] // self.clip_gap + 1
-            # 计算分割高度，用于确定修复区域的大小
+            start, end = frame_interval
+            print("Starting frame:", start, "Ending frame:", end)
+            interval_length = end - start + 1
+            rec_time = interval_length // self.clip_gap if interval_length % self.clip_gap == 0 else interval_length // self.clip_gap + 1
+            print("Rec_time:", rec_time)
             
             if input_mask is None:
                 # 读取掩码
@@ -230,16 +234,12 @@ class STTNVideoInpaint:
             # 遍历每一次的迭代次数
             for i in range(rec_time):
                 start_f = i * self.clip_gap  # 起始帧位置
-                end_f = min((i + 1) * self.clip_gap, frame_info['len'])  # 结束帧位置
-                print('Processing:', start_f + 1, '-', end_f, ' / Total:', frame_info['len'])
+                end_f = min((i + 1) * self.clip_gap, end)  # 结束帧位置
+                print('Processing:', start_f, '-', end_f, ' / Total:', frame_info['len'])
                 
                 frames_hr = []  # 高分辨率帧列表
-                frames = {}  # 帧字典，用于存储裁剪后的图像
+                frames = []  # 帧字典，用于存储裁剪后的图像
                 comps = {}  # 组合字典，用于存储修复后的图像
-                
-                # 初始化帧字典
-                for k in range(len(subtitle_coords)):
-                    frames[k] = []
                     
                 # 读取和修复高分辨率帧
                 valid_frames_count = 0
@@ -252,16 +252,14 @@ class STTNVideoInpaint:
                     frames_hr.append(image)
                     valid_frames_count += 1
                     
-                    for k in range(len(subtitle_coords)):
-                        subtitle_region = self.get_subtitle_region_for_frame(subtitle_coords, frame_intervals, j)
-                        if subtitle_region is None:
-                            print(f"Warning: No subtitle region found for frame {j}. Skipping this frame.")
-                            continue
-                        x_min, x_max, y_min, y_max = subtitle_region
-                        # 裁剪、缩放并添加到帧字典
-                        image_crop = image[y_min:y_max, x_min:x_max, :]
-                        image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
-                        frames[k].append(image_resize)
+                    if subtitle_coord is None:
+                        print(f"Warning: No subtitle region found for frame {j}. Skipping this frame.")
+                        continue
+                    x_min, x_max, y_min, y_max = subtitle_coord
+                    # 裁剪、缩放并添加到帧字典
+                    image_crop = image[y_min:y_max, x_min:x_max, :]
+                    image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
+                    frames.append(image_resize)
                 
                 # 如果没有读取到有效帧，则跳过当前迭代
                 if valid_frames_count == 0:
@@ -269,14 +267,13 @@ class STTNVideoInpaint:
                     continue
                     
                 # 对每个修复区域运行修复
-                for k in range(len(subtitle_coords)):
-                    if len(frames[k]) > 0:  # 确保有帧可以处理
-                        comps[k] = self.sttn_inpaint.inpaint(frames[k])
-                    else:
-                        comps[k] = []
+                if len(frames) > 0:  # 确保有帧可以处理
+                    comps = self.sttn_inpaint.inpaint(frames)
+                else:
+                    comps = []
                 
                 # 如果有要修复的区域
-                if subtitle_coords and valid_frames_count > 0:
+                if subtitle_coord and valid_frames_count > 0:
                     for j in range(valid_frames_count):
                         if input_sub_remover is not None and input_sub_remover.gui_mode:
                             original_frame = copy.deepcopy(frames_hr[j])
@@ -285,16 +282,15 @@ class STTNVideoInpaint:
                             
                         frame = frames_hr[j]
                         mask_area = mask[y_min:y_max, x_min:x_max, :]
-                        # print("Updated mask:", mask_area.shape)
+                        print("Updated mask:", mask_area.shape)
                         
-                        for k in range(len(subtitle_coords)):
-                            if j < len(comps[k]):  # 确保索引有效
-                                # 将修复的图像重新扩展到原始分辨率，并融合到原始帧
-                                sub_height = y_max - y_min
-                                sub_width = x_max - x_min
-                                comp = cv2.resize(comps[k][j], (sub_width, sub_height))
-                                comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                                frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
+                        if j < len(comps):  # 确保索引有效
+                            # 将修复的图像重新扩展到原始分辨率，并融合到原始帧
+                            sub_height = y_max - y_min
+                            sub_width = x_max - x_min
+                            comp = cv2.resize(comps[j], (sub_width, sub_height))
+                            comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
+                            frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
                         
                         writer.write(frame)
                         

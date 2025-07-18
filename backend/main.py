@@ -773,12 +773,14 @@ class SubtitleRemover:
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
         for i in range(len(self.frame_intervals)):
             mask = create_mask(self.mask_size, coords=self.distinct_coords[i])
-        
-        # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
+            start, end = self.frame_intervals[i]
+            # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
             sttn_video_inpaint(
                 input_mask=mask, input_sub_remover=self, tbar=tbar, 
-                frame_intervals=self.frame_intervals, subtitle_coords=self.distinct_coords
+                frame_interval=self.frame_intervals[i], subtitle_coord=self.distinct_coords[i]
                 )
+            
+            print(f"Finished processing frames {start} to {end}.")
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
