@@ -293,6 +293,7 @@ class STTNVideoInpaint:
                                 comp = cv2.resize(comps[k][j], (sub_width, sub_height))
                                 comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
                                 mask_area = mask[y_min:y_max, x_min:x_max, :]
+                                print("Updated mask:", mask_area.shape)
                                 frame[y_min:y_max, x_min:x_max, :] = mask_area * comp + (1 - mask_area) * frame[y_min:y_max, x_min:x_max, :]
                         
                         writer.write(frame)
