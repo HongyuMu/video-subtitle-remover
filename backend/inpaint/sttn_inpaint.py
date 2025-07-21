@@ -165,6 +165,44 @@ class STTNInpaint:
                         comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
         # 返回处理完成的帧序列
         return comp_frames
+    
+    @staticmethod
+    def get_inpaint_area_by_mask(H, h, mask):
+        """
+        获取字幕去除区域，根据mask来确定需要填补的区域和高度
+        """
+        # 存储绘画区域的列表
+        inpaint_area = []
+        # 从视频底部的字幕位置开始，假设字幕通常位于底部
+        to_H = from_H = H
+        # 从底部向上遍历遮罩
+        while from_H != 0:
+            if to_H - h < 0:
+                # 如果下一段会超出顶端，则从顶端开始
+                from_H = 0
+                to_H = h
+            else:
+                # 确定段的上边界
+                from_H = to_H - h
+            # 检查当前段落是否包含遮罩像素
+            if not np.all(mask[from_H:to_H, :] == 0) and np.sum(mask[from_H:to_H, :]) > 10:
+                # 如果不是第一个段落，向下移动以确保没遗漏遮罩区域
+                if to_H != H:
+                    move = 0
+                    while to_H + move < H and not np.all(mask[to_H + move, :] == 0):
+                        move += 1
+                    # 确保没有越过底部
+                    if to_H + move < H and move < h:
+                        to_H += move
+                        from_H += move
+                # 将该段落添加到列表中
+                if (from_H, to_H) not in inpaint_area:
+                    inpaint_area.append((from_H, to_H))
+                else:
+                    break
+            # 移动到下一个段落
+            to_H -= h
+        return inpaint_area  # 返回绘画区域列表
 
 class STTNVideoInpaint:
 
@@ -258,8 +296,20 @@ class STTNVideoInpaint:
                     x_min, x_max, y_min, y_max = subtitle_coord
                     # 裁剪、缩放并添加到帧字典
                     image_crop = image[y_min:y_max, x_min:x_max, :]
-                    image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
-                    frames.append(image_resize)
+                    # Get the width and height of the cropped image
+                    height, width = image_crop.shape[:2]
+                    aspect_ratio = self.sttn_inpaint.model_input_width / self.sttn_inpaint.model_input_height
+
+                    # Scale the height proportionally to maintain the aspect ratio
+                    new_height = int(width / aspect_ratio)
+
+                    # Resize the cropped image to the new width and corresponding height
+                    image_padded = cv2.resize(image_crop, (width, new_height))
+                    image_resized = cv2.resize(image_padded, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
+                    frames.append(image_resized)
+
+                print("Cropped height and width:", image_crop.shape[:2])
+                print("Padded height and width:", image_padded.shape[:2])
                 
                 # 如果没有读取到有效帧，则跳过当前迭代
                 if valid_frames_count == 0:
