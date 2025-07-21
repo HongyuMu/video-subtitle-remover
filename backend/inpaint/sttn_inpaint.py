@@ -203,21 +203,40 @@ class STTNInpaint:
 
     @staticmethod
     def get_inpaint_area_by_selection(input_sub_area, mask):
-        print('use selection area for inpainting')
+        print('Use selection area for inpainting')
         height, width = mask.shape[:2]
-        ymin, ymax, _, _ = input_sub_area
-        interval_size = 135
-        # 存储结果的列表
+        xmin, xmax, ymin, ymax = input_sub_area  # Quadruple input coordinates
+        interval_size = 135  # Height interval size
         inpaint_area = []
-        # 计算并存储标准区间
+
+        # Handling the Y-axis (vertical inpainting)
         for i in range(ymin, ymax, interval_size):
             inpaint_area.append((i, i + interval_size))
-        # 检查最后一个区间是否达到了最大值
+
+        # Check if the last vertical interval exceeds ymax, and extend it if necessary
         if inpaint_area[-1][1] != ymax:
             # 如果没有，则创建一个新的区间，开始于最后一个区间的结束，结束于扩大后的值
             if inpaint_area[-1][1] + interval_size <= height:
                 inpaint_area.append((inpaint_area[-1][1], inpaint_area[-1][1] + interval_size))
-        return inpaint_area  # 返回绘画区域列表
+        
+        # Now handle the X-axis (horizontal inpainting)
+        x_intervals = []
+        interval_width = xmax - xmin
+        if interval_width > 0:
+            num_x_intervals = interval_width // interval_size
+            if num_x_intervals > 0:
+                for i in range(xmin, xmax, interval_size):
+                    x_intervals.append((i, min(i + interval_size, xmax)))  # Ensure we don't exceed xmax
+            else:
+                x_intervals.append((xmin, xmax))  # If the width is too small, use the entire width
+
+        # Now combine both vertical and horizontal inpainting areas
+        full_inpaint_area = []
+        for y_start, y_end in inpaint_area:
+            for x_start, x_end in x_intervals:
+                full_inpaint_area.append((x_start, x_end, y_start, y_end))  # (xmin, xmax, ymin, ymax)
+
+        return full_inpaint_area  # 返回绘画区域列表
 
 
 class STTNVideoInpaint:
@@ -273,11 +292,15 @@ class STTNVideoInpaint:
                 # 读取掩码
                 mask = self.sttn_inpaint.read_mask(self.mask_path)
             else:
+                print(f"Mask type: {type(input_mask)}")
+                print(f"Mask shape: {input_mask.shape}")
                 _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
                 mask = mask[:, :, None]
-                
+            
+            print("Mask shape:", mask.shape[:2])
             # 得到修复区域位置
             inpaint_area = self.sttn_inpaint.get_inpaint_area_by_mask(frame_info['H_ori'], split_h, mask)
+            print("The inpainting area:", inpaint_area)
             
             # 遍历每一次的迭代次数
             for i in range(rec_time):
@@ -310,6 +333,8 @@ class STTNVideoInpaint:
                         image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
                         frames[k].append(image_resize)
                 
+                print("Cropped Image shape:", image_crop.shape)
+                print("Resized Image shape:", image_resize.shape)
                 # 如果没有读取到有效帧，则跳过当前迭代
                 if valid_frames_count == 0:
                     print(f"Warning: No valid frames found in range {start_f+1}-{end_f}. Skipping this segment.")
