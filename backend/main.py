@@ -765,12 +765,12 @@ class SubtitleRemover:
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
         if self.sub_area is not None:
-            ymin, ymax, xmin, xmax = self.sub_area
+            xmin, xmax, ymin, ymax = self.sub_area
         else:
             print('[Info] No subtitle area has been set. Video will be processed in full screen. As a result, the final outcome might be suboptimal.')
             ymin, ymax, xmin, xmax = 0, self.frame_height, 0, self.frame_width
         mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-        mask = create_mask(self.mask_size, mask_area_coordinates)
+        mask= create_mask(self.mask_size, mask_area_coordinates)
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
         sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
 
@@ -1005,6 +1005,7 @@ if __name__ == '__main__':
             # Extract distinct_coords and frame_intervals from the JSON data
             coords = json_data.get("distinct_coordinates")
             bounding_box = find_smallest_bounding_box(coordinates=coords)
+            print("Bounding Box:", bounding_box)
             
             sd = SubtitleRemover(video_path, sub_area=bounding_box)
             sd.run()
