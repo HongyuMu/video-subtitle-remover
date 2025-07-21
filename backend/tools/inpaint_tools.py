@@ -72,22 +72,23 @@ def inpaint_with_multiple_masks(censored_img, mask_list):
     return inpainted_frame
 
 
-def create_mask(size, coords):
+def create_mask(size, coords_list):
     mask = np.zeros(size, dtype="uint8")
-    
-    xmin, xmax, ymin, ymax = coords
-    # 为了避免框过小，放大10个像素
-    x1 = xmin - config.SUBTITLE_AREA_DEVIATION_PIXEL
-    if x1 < 0:
-        x1 = 0
-    y1 = ymin - config.SUBTITLE_AREA_DEVIATION_PIXEL
-    if y1 < 0:
-        y1 = 0
-    x2 = xmax + config.SUBTITLE_AREA_DEVIATION_PIXEL
-    y2 = ymax + config.SUBTITLE_AREA_DEVIATION_PIXEL
-    cv2.rectangle(mask, (x1, y1),
-                  (x2, y2), (255, 255, 255), thickness=-1)
-    return mask, (x1, x2, y1, y2)
+    if coords_list:
+        for coords in coords_list:
+            xmin, xmax, ymin, ymax = coords
+            # 为了避免框过小，放大10个像素
+            x1 = xmin - config.SUBTITLE_AREA_DEVIATION_PIXEL
+            if x1 < 0:
+                x1 = 0
+            y1 = ymin - config.SUBTITLE_AREA_DEVIATION_PIXEL
+            if y1 < 0:
+                y1 = 0
+            x2 = xmax + config.SUBTITLE_AREA_DEVIATION_PIXEL
+            y2 = ymax + config.SUBTITLE_AREA_DEVIATION_PIXEL
+            cv2.rectangle(mask, (x1, y1),
+                          (x2, y2), (255, 255, 255), thickness=-1)
+    return mask
 
 
 def inpaint_video(video_path, sub_list):
