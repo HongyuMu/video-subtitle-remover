@@ -548,7 +548,7 @@ class SubtitleDetect:
         sub_area_with_frequency = self.get_frequency_in_range(sub_frame_no_list_continuous, subtitle_frame_no_box_dict)
         correct_sub_area = []
         for sub_area in sub_area_with_frequency.keys():
-            if sub_area_with_frequency[sub_area] >= (fps // 10):
+            if sub_area_with_frequency[sub_area] >= (fps // 2):
                 correct_sub_area.append(sub_area)
             else:
                 print(f'drop {sub_area}')
@@ -564,15 +564,12 @@ class SubtitleDetect:
 
 
 class SubtitleRemover:
-    def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
+    def __init__(self, vd_path, sub_area=None, gui_mode=False):
         importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置
         self.sub_area = sub_area
-        self.distinct_coords = distinct_coords
-        # 用户指定的字幕区域对应的帧数范围
-        self.frame_intervals = frame_intervals
         # 是否为gui运行，gui运行需要显示预览
         self.gui_mode = gui_mode
         # 判断是否为图片
@@ -653,7 +650,7 @@ class SubtitleRemover:
     @staticmethod
     def is_current_frame_no_start(frame_no, continuous_frame_no_list):
         """
-        判断给定的帧号是否为开头
+        判断给定的帧号是否为开头，是的话返回结束帧号，不是的话返回-1
         """
         for start_no, end_no in continuous_frame_no_list:
             if start_no == frame_no:
@@ -663,7 +660,7 @@ class SubtitleRemover:
     @staticmethod
     def find_frame_no_end(frame_no, continuous_frame_no_list):
         """
-        判断给定的帧号是否为结尾，是的话返回结束帧号，不是的话返回-1
+        判断给定的帧号是否为开头，是的话返回结束帧号，不是的话返回-1
         """
         for start_no, end_no in continuous_frame_no_list:
             if start_no <= frame_no <= end_no:
@@ -763,30 +760,24 @@ class SubtitleRemover:
 
     def sttn_mode_with_no_detection(self, tbar):
         """
-        Use STTN to repaint selected areas without subtitle detection
-        (with distinct coordinates for each subtitle area).
+        使用sttn对选中区域进行重绘，不进行字幕检测
         """
         print('use sttn mode with no detection')
         print('[Processing] start removing subtitles...')
-        
-        # Initialize STTNVideoInpaint once outside the loop
+        if self.sub_area is not None:
+            ymin, ymax, xmin, xmax = self.sub_area
+        else:
+            print('[Info] No subtitle area has been set. Video will be processed in full screen. As a result, the final outcome might be suboptimal.')
+            ymin, ymax, xmin, xmax = 0, self.frame_height, 0, self.frame_width
+        mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
+        mask = create_mask(self.mask_size, mask_area_coordinates)
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
-        for i in range(len(self.frame_intervals)):
-            mask, box = create_mask(self.mask_size, coords=self.distinct_coords[i])
-            print(f"Rectangle of subtitle: {box}")
-            start, end = self.frame_intervals[i]
-            # Call the inpaint function for the entire video, passing the frame intervals and subtitle coordinates
-            sttn_video_inpaint(
-                input_mask=mask, input_sub_remover=self, tbar=tbar, 
-                frame_interval=self.frame_intervals[i], subtitle_coord=self.distinct_coords[i]
-                )
-            
-            print(f"Finished processing frames {start} to {end}.")
+        sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
         if config.STTN_SKIP_DETECTION:
-            # 若跳过则直接使用sttn模式
+            # 若跳过则世界使用sttn模式
             self.sttn_mode_with_no_detection(tbar)
         else:
             print('use sttn mode')
@@ -893,7 +884,6 @@ class SubtitleRemover:
         self.progress_total = 0
         tbar = tqdm(total=int(self.frame_count), unit='frame', position=0, file=sys.__stdout__,
                     desc='Subtitle Removing')
-        
         if self.is_picture:
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             self.lama_inpaint = LamaInpaint()
@@ -921,9 +911,9 @@ class SubtitleRemover:
         if not self.is_picture:
             # 将原音频合并到新生成的视频文件中
             self.merge_audio_to_video()
-            print(f"[Finished]Subtitle successfully removed, video generated at: {self.video_out_name}")
+            print(f"[Finished]Subtitle successfully removed, video generated at：{self.video_out_name}")
         else:
-            print(f"[Finished]Subtitle successfully removed, picture generated at: {self.video_out_name}")
+            print(f"[Finished]Subtitle successfully removed, picture generated at：{self.video_out_name}")
         print(f'time cost: {round(time.time() - start_time, 2)}s')
         self.isFinished = True
         self.progress_total = 100
@@ -979,6 +969,21 @@ class SubtitleRemover:
                 except IOError as e:
                     print("Unable to copy file. %s" % e)
             self.video_temp_file.close()
+    
+def find_smallest_bounding_box(coordinates):
+    # Initialize min and max values based on the first box
+    xmin = xmax = coordinates[0][0]
+    ymin = ymax = coordinates[0][2]
+
+    # Loop through all the coordinates to find the overall bounding box
+    for box in coordinates:
+        xmin = min(xmin, box[0])
+        xmax = max(xmax, box[1])
+        ymin = min(ymin, box[2])
+        ymax = max(ymax, box[3])
+
+    # Return the bounding box as a tuple
+    return (xmin, xmax, ymin, ymax)
 
 
 if __name__ == '__main__':
@@ -999,14 +1004,9 @@ if __name__ == '__main__':
             
             # Extract distinct_coords and frame_intervals from the JSON data
             coords = json_data.get("distinct_coordinates")
-            intervals = json_data.get("frame_intervals")
-            # include the 0th frame to avoid OpenCV error
-            intervals[0][0] = 0
+            bounding_box = find_smallest_bounding_box(coordinates=coords)
             
-            if not coords or not intervals:
-                raise ValueError("The JSON file must contain 'distinct_coordinates' and 'frame_intervals'.")
-            
-            sd = SubtitleRemover(video_path, sub_area=None, distinct_coords=coords, frame_intervals=intervals)
+            sd = SubtitleRemover(video_path, sub_area=bounding_box)
             sd.run()
         except FileNotFoundError:
             print(f"Error: The file '{json_path}' was not found.")
