@@ -1,6 +1,7 @@
 import subprocess
 import cv2
 import os
+import shutil
 
 def extract_frames_with_ffmpeg(input_video_path, output_dir, interval, fps=60):
     """
@@ -14,22 +15,21 @@ def extract_frames_with_ffmpeg(input_video_path, output_dir, interval, fps=60):
     end_frame = interval[1]
     # FFmpeg command to extract frames within the specific interval
     ffmpeg_command = [
-        'D:/Program Files/ffmpeg/bin/ffmpeg.exe',
-        '-i', input_video_path,            # Input video file
+        'D:/Program Files/ffmpeg/bin/ffmpeg.exe',  # Path to FFmpeg executable
+        '-i', input_video_path,                    # Input video file
         '-vf', f'fps={fps},select=between(n\\,{start_frame}\\,{end_frame})',  # Extract frames from start_frame to end_frame
-        '-vsync', '0',                     # Disable frame rate syncing
-        os.path.join(output_dir, 'frame_%04d.png')  # Output frames
+        '-vsync', '0',                             # Disable frame rate syncing
+        os.path.join(output_dir, 'frame_%04d.png') # Output frames
     ]
     
     subprocess.run(ffmpeg_command, check=True)
 
-def create_cropped_video(input_video_path, output_video_path, interval, crop_coords=None, fps=60):
+def create_cropped_video(input_video_path, output_dir, interval, crop_coords=None, fps=60):
     """
     Create a cropped video from a specific interval of the video.
     """
     # Step 1: Extract frames from video using FFmpeg
-    output_dir = 'extracted_frames'
-    extract_frames_with_ffmpeg(input_video_path, output_dir, interval=interval, fps=60)
+    extract_frames_with_ffmpeg(input_video_path, output_dir, interval=interval, fps=fps)
     
     # Step 2: Process each frame (crop and re-encode)
     frame_files = sorted(os.listdir(output_dir))
@@ -47,8 +47,9 @@ def create_cropped_video(input_video_path, output_video_path, interval, crop_coo
         frames.append(frame)
     
     # Step 3: Create the output video using the cropped frames
+    output_video_path = os.path.join(output_dir, 'cropped_output.mp4')  # Dynamic path to save the cropped video
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    writer = cv2.VideoWriter(output_video_path, fourcc, fps, (frame.shape[1], frame.shape[0]))
+    writer = cv2.VideoWriter(output_video_path, fourcc, fps, (frame.shape[1], frame.shape[0]))  # Correct dimensions
     
     for frame in frames:
         writer.write(frame)
@@ -58,7 +59,7 @@ def create_cropped_video(input_video_path, output_video_path, interval, crop_coo
     # Cleanup extracted frames
     for frame_file in frame_files:
         os.remove(os.path.join(output_dir, frame_file))
-    os.rmdir(output_dir)
+    shutil.rmtree(output_dir)
     
     print(f"Cropped video saved at: {output_video_path}")
     return output_video_path
