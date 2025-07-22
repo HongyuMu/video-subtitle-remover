@@ -564,12 +564,15 @@ class SubtitleDetect:
 
 
 class SubtitleRemover:
-    def __init__(self, vd_path, sub_area=None, gui_mode=False):
+    def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
         importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
-        # 用户指定的字幕区域位置
+        # 用户指定的字幕区域位置（如果字幕位置始终不变）
         self.sub_area = sub_area
+        # 用户指定的坐标list和对应帧区间
+        self.distinct_coords = distinct_coords
+        self.frame_intervals = frame_intervals
         # 是否为gui运行，gui运行需要显示预览
         self.gui_mode = gui_mode
         # 判断是否为图片
@@ -763,21 +766,22 @@ class SubtitleRemover:
         使用sttn对选中区域进行重绘，不进行字幕检测
         """
         print('use sttn mode with no detection')
-        print('[Processing] start removing subtitles...')
-        if self.sub_area is not None:
-            xmin, xmax, ymin, ymax = self.sub_area
-        else:
-            print('[Info] No subtitle area has been set. Video will be processed in full screen. As a result, the final outcome might be suboptimal.')
-            ymin, ymax, xmin, xmax = 0, self.frame_height, 0, self.frame_width
-        mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-        mask= create_mask(self.mask_size, mask_area_coordinates)
         sttn_video_inpaint = STTNVideoInpaint(self.video_path)
-        sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
+        for i in range(len(self.frame_intervals)):
+            interval = self.frame_intervals[i]
+            start, end = interval[0], interval[1]
+            print(f'\n[Processing] start removing subtitles for frame {start} - {end}')
+            
+            xmin, xmax, ymin, ymax = self.distinct_coords[i]
+            print(f'[Info] Subtitle coordinates read from json file input as {(xmin, xmax, ymin, ymax)}.')
+            mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
+            mask= create_mask(self.mask_size, mask_area_coordinates)
+            sttn_video_inpaint(input_mask=mask, input_sub_remover=self, interval=interval, tbar=tbar)
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
         if config.STTN_SKIP_DETECTION:
-            # 若跳过则世界使用sttn模式
+            # 若跳过则直接使用sttn模式
             self.sttn_mode_with_no_detection(tbar)
         else:
             print('use sttn mode')
@@ -1004,10 +1008,12 @@ if __name__ == '__main__':
             
             # Extract distinct_coords and frame_intervals from the JSON data
             coords = json_data.get("distinct_coordinates")
-            bounding_box = find_smallest_bounding_box(coordinates=coords)
-            print("Bounding Box:", bounding_box)
-            
-            sd = SubtitleRemover(video_path, sub_area=bounding_box)
+            intervals = json_data.get("frame_intervals")
+
+            # OpenCV reads from frame 0
+            intervals[0][0] = 0
+
+            sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
             sd.run()
         except FileNotFoundError:
             print(f"Error: The file '{json_path}' was not found.")
