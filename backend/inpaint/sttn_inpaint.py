@@ -271,7 +271,7 @@ class STTNVideoInpaint:
         else:
             self.clip_gap = clip_gap
 
-    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None):
+    def __call__(self, input_mask=None, input_sub_remover=None, interval=None, tbar=None):
         reader = None
         writer = None
         try:
@@ -284,7 +284,9 @@ class STTNVideoInpaint:
                 writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
             
             # 计算需要迭代修复视频的次数
-            rec_time = frame_info['len'] // self.clip_gap if frame_info['len'] % self.clip_gap == 0 else frame_info['len'] // self.clip_gap + 1
+            start, end = interval[0], interval[1]
+            int_len = end - start + 1
+            rec_time = int_len // self.clip_gap if int_len % self.clip_gap == 0 else int_len // self.clip_gap + 1
             # 计算分割高度，用于确定修复区域的大小
             split_h = int(frame_info['W_ori'] * 3 / 16)
             
@@ -292,8 +294,6 @@ class STTNVideoInpaint:
                 # 读取掩码
                 mask = self.sttn_inpaint.read_mask(self.mask_path)
             else:
-                print(f"Mask type: {type(input_mask)}")
-                print(f"Mask shape: {input_mask.shape}")
                 _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
                 mask = mask[:, :, None]
             
@@ -305,8 +305,8 @@ class STTNVideoInpaint:
             # 遍历每一次的迭代次数
             for i in range(rec_time):
                 start_f = i * self.clip_gap  # 起始帧位置
-                end_f = min((i + 1) * self.clip_gap, frame_info['len'])  # 结束帧位置
-                print('Processing:', start_f + 1, '-', end_f, ' / Total:', frame_info['len'])
+                end_f = min((i + 1) * self.clip_gap, int_len) # 结束帧位置
+                print('\nProcessing:', start_f + start, '-', end_f + start - 1, ' / Total:', frame_info['len'])
                 
                 frames_hr = []  # 高分辨率帧列表
                 frames = {}  # 帧字典，用于存储裁剪后的图像
@@ -317,6 +317,8 @@ class STTNVideoInpaint:
                     frames[k] = []
                     
                 # 读取和修复高分辨率帧
+                reader.set(cv2.CAP_PROP_POS_FRAMES, start_f + start)  # Reset to the correct start frame
+                print(f"Setting start frame to {start_f + start}.")
                 valid_frames_count = 0
                 for j in range(start_f, end_f):
                     success, image = reader.read()
@@ -333,12 +335,11 @@ class STTNVideoInpaint:
                         image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
                         frames[k].append(image_resize)
                 
-                print("Cropped Image shape:", image_crop.shape)
-                print("Resized Image shape:", image_resize.shape)
                 # 如果没有读取到有效帧，则跳过当前迭代
                 if valid_frames_count == 0:
-                    print(f"Warning: No valid frames found in range {start_f+1}-{end_f}. Skipping this segment.")
+                    print(f"Warning: No valid frames found in range {start_f}-{end_f}. Skipping this segment.")
                     continue
+                print("Valid frames:", valid_frames_count)
                     
                 # 对每个修复区域运行修复
                 for k in range(len(inpaint_area)):
