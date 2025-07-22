@@ -19,6 +19,7 @@ from backend.inpaint.sttn_inpaint import STTNInpaint, STTNVideoInpaint
 from backend.inpaint.lama_inpaint import LamaInpaint
 from backend.inpaint.video_inpaint import VideoInpaint
 from backend.tools.inpaint_tools import create_mask, batch_generator
+from backend.tools.crop_video import create_cropped_video
 import importlib
 import platform
 import tempfile

@@ -61,6 +61,7 @@ def create_cropped_video(input_video_path, output_video_path, interval, crop_coo
     os.rmdir(output_dir)
     
     print(f"Cropped video saved at: {output_video_path}")
+    return output_video_path
 
 if __name__ == '__main__':
     input_video_path = input("Enter video file to be cropped: ").strip()
