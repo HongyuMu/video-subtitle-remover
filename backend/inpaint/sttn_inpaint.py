@@ -203,40 +203,21 @@ class STTNInpaint:
 
     @staticmethod
     def get_inpaint_area_by_selection(input_sub_area, mask):
-        print('Use selection area for inpainting')
+        print('use selection area for inpainting')
         height, width = mask.shape[:2]
-        xmin, xmax, ymin, ymax = input_sub_area  # Quadruple input coordinates
-        interval_size = 135  # Height interval size
+        ymin, ymax, _, _ = input_sub_area
+        interval_size = 135
+        # 存储结果的列表
         inpaint_area = []
-
-        # Handling the Y-axis (vertical inpainting)
+        # 计算并存储标准区间
         for i in range(ymin, ymax, interval_size):
             inpaint_area.append((i, i + interval_size))
-
-        # Check if the last vertical interval exceeds ymax, and extend it if necessary
+        # 检查最后一个区间是否达到了最大值
         if inpaint_area[-1][1] != ymax:
             # 如果没有，则创建一个新的区间，开始于最后一个区间的结束，结束于扩大后的值
             if inpaint_area[-1][1] + interval_size <= height:
                 inpaint_area.append((inpaint_area[-1][1], inpaint_area[-1][1] + interval_size))
-        
-        # Now handle the X-axis (horizontal inpainting)
-        x_intervals = []
-        interval_width = xmax - xmin
-        if interval_width > 0:
-            num_x_intervals = interval_width // interval_size
-            if num_x_intervals > 0:
-                for i in range(xmin, xmax, interval_size):
-                    x_intervals.append((i, min(i + interval_size, xmax)))  # Ensure we don't exceed xmax
-            else:
-                x_intervals.append((xmin, xmax))  # If the width is too small, use the entire width
-
-        # Now combine both vertical and horizontal inpainting areas
-        full_inpaint_area = []
-        for y_start, y_end in inpaint_area:
-            for x_start, x_end in x_intervals:
-                full_inpaint_area.append((x_start, x_end, y_start, y_end))  # (xmin, xmax, ymin, ymax)
-
-        return full_inpaint_area  # 返回绘画区域列表
+        return inpaint_area  # 返回绘画区域列表
 
 
 class STTNVideoInpaint:
@@ -254,12 +235,15 @@ class STTNVideoInpaint:
         # 返回视频读取对象、帧信息和视频写入对象
         return reader, frame_info
 
-    def __init__(self, video_path, mask_path=None, clip_gap=None):
+    def __init__(self, video_path, mask_path=None, clip_gap=None, subtitle_areas=None, frame_intervals=None):
         # STTNInpaint视频修复实例初始化
         self.sttn_inpaint = STTNInpaint()
         # 视频和掩码路径
         self.video_path = video_path
         self.mask_path = mask_path
+        # 新增：字幕区域和帧区间
+        self.subtitle_areas = subtitle_areas
+        self.frame_intervals = frame_intervals
         # 设置输出视频文件的路径
         self.video_out_path = os.path.join(
             os.path.dirname(os.path.abspath(self.video_path)),
@@ -271,7 +255,7 @@ class STTNVideoInpaint:
         else:
             self.clip_gap = clip_gap
 
-    def __call__(self, input_mask=None, input_sub_remover=None, interval=None, tbar=None):
+    def __call__(self, input_mask=None, input_sub_remover=None, tbar=None):
         reader = None
         writer = None
         try:
@@ -282,97 +266,60 @@ class STTNVideoInpaint:
             else:
                 # 创建视频写入对象，用于输出修复后的视频
                 writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
-            
-            # 计算需要迭代修复视频的次数
-            start, end = interval[0], interval[1]
-            int_len = end - start + 1
-            rec_time = int_len // self.clip_gap if int_len % self.clip_gap == 0 else int_len // self.clip_gap + 1
-            # 计算分割高度，用于确定修复区域的大小
-            split_h = int(frame_info['W_ori'] * 3 / 16)
-            
-            if input_mask is None:
-                # 读取掩码
-                mask = self.sttn_inpaint.read_mask(self.mask_path)
-            else:
-                _, mask = cv2.threshold(input_mask, 127, 1, cv2.THRESH_BINARY)
-                mask = mask[:, :, None]
-            
-            print("Mask shape:", mask.shape[:2])
-            # 得到修复区域位置
-            inpaint_area = self.sttn_inpaint.get_inpaint_area_by_mask(frame_info['H_ori'], split_h, mask)
-            print("The inpainting area:", inpaint_area)
-            
-            # 遍历每一次的迭代次数
-            for i in range(rec_time):
-                start_f = i * self.clip_gap  # 起始帧位置
-                end_f = min((i + 1) * self.clip_gap, int_len) # 结束帧位置
-                print('\nProcessing:', start_f + start, '-', end_f + start - 1, ' / Total:', frame_info['len'])
-                
-                frames_hr = []  # 高分辨率帧列表
-                frames = {}  # 帧字典，用于存储裁剪后的图像
-                comps = {}  # 组合字典，用于存储修复后的图像
-                
-                # 初始化帧字典
-                for k in range(len(inpaint_area)):
-                    frames[k] = []
-                    
-                # 读取和修复高分辨率帧
-                reader.set(cv2.CAP_PROP_POS_FRAMES, start_f + start)  # Reset to the correct start frame
-                print(f"Setting start frame to {start_f + start}.")
-                valid_frames_count = 0
-                for j in range(start_f, end_f):
-                    success, image = reader.read()
-                    if not success:
-                        print(f"Warning: Failed to read frame {j}.")
-                        break
-                    
-                    frames_hr.append(image)
-                    valid_frames_count += 1
-                    
-                    for k in range(len(inpaint_area)):
-                        # 裁剪、缩放并添加到帧字典
-                        image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                        image_resize = cv2.resize(image_crop, (self.sttn_inpaint.model_input_width, self.sttn_inpaint.model_input_height))
-                        frames[k].append(image_resize)
-                
-                # 如果没有读取到有效帧，则跳过当前迭代
-                if valid_frames_count == 0:
-                    print(f"Warning: No valid frames found in range {start_f}-{end_f}. Skipping this segment.")
-                    continue
-                print("Valid frames:", valid_frames_count)
-                    
-                # 对每个修复区域运行修复
-                for k in range(len(inpaint_area)):
-                    if len(frames[k]) > 0:  # 确保有帧可以处理
-                        comps[k] = self.sttn_inpaint.inpaint(frames[k])
-                    else:
-                        comps[k] = []
-                
-                # 如果有要修复的区域
-                if inpaint_area and valid_frames_count > 0:
-                    for j in range(valid_frames_count):
-                        if input_sub_remover is not None and input_sub_remover.gui_mode:
-                            original_frame = copy.deepcopy(frames_hr[j])
-                        else:
-                            original_frame = None
-                            
-                        frame = frames_hr[j]
-                        
-                        for k in range(len(inpaint_area)):
-                            if j < len(comps[k]):  # 确保索引有效
-                                # 将修复的图像重新扩展到原始分辨率，并融合到原始帧
-                                comp = cv2.resize(comps[k][j], (frame_info['W_ori'], split_h))
-                                comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)
-                                mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
-                                frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                        
-                        writer.write(frame)
-                        
-                        if input_sub_remover is not None:
-                            if tbar is not None:
-                                input_sub_remover.update_progress(tbar, increment=1)
-                            if original_frame is not None and input_sub_remover.gui_mode:
-                                input_sub_remover.preview_frame = cv2.hconcat([original_frame, frame])
+
+            total_frames = frame_info['len']
+            all_frames = []
+            for i in range(total_frames):
+                success, frame = reader.read()
+                if not success:
+                    print(f"Warning: Failed to read frame {i}.")
+                    all_frames.append(None)
+                else:
+                    all_frames.append(frame)
+
+            # 标记每一帧是否已处理
+            processed = [False] * total_frames
+
+            # 如果有字幕区域和帧区间列表，则按区间处理
+            if self.subtitle_areas is not None and self.frame_intervals is not None:
+                for idx, (interval, area) in enumerate(zip(self.frame_intervals, self.subtitle_areas)):
+                    start, end = interval
+                    # 容错：确保索引在范围内
+                    start = max(0, int(start))
+                    end = min(total_frames - 1, int(end))
+                    # 收集该区间的帧
+                    frames_to_inpaint = [all_frames[i] for i in range(start, end + 1) if all_frames[i] is not None]
+                    if not frames_to_inpaint:
+                        continue
+                    # 构建mask
+                    mask = np.zeros((frame_info['H_ori'], frame_info['W_ori']), dtype=np.uint8)
+                    xmin, xmax, ymin, ymax = area
+                    mask[ymin:ymax, xmin:xmax] = 255
+                    mask = mask[:, :, None]
+                    # Inpaint
+                    inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
+                    # 写回结果
+                    j = 0
+                    for i in range(start, end + 1):
+                        if all_frames[i] is not None:
+                            frame = inpainted_frames[j]
+                            writer.write(frame)
+                            processed[i] = True
+                            j += 1
+                            if input_sub_remover is not None:
+                                if tbar is not None:
+                                    input_sub_remover.update_progress(tbar, increment=1)
+                                if input_sub_remover.gui_mode:
+                                    input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
+            # 处理未被处理的帧（无字幕的帧，直接写原始帧）
+            for i in range(total_frames):
+                if not processed[i] and all_frames[i] is not None:
+                    writer.write(all_frames[i])
+                    if input_sub_remover is not None:
+                        if tbar is not None:
+                            input_sub_remover.update_progress(tbar, increment=1)
+                        if input_sub_remover.gui_mode:
+                            input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], all_frames[i]])
         except Exception as e:
             print(f"Error during video processing: {str(e)}")
             # 不抛出异常，允许程序继续执行
