@@ -8,11 +8,13 @@ from torchvision import transforms
 from typing import List
 import sys
 import os
+from tqdm import tqdm
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from backend import config
 from backend.inpaint.sttn.auto_sttn import InpaintGenerator
 from backend.inpaint.utils.sttn_utils import Stack, ToTorchFormatTensor
+from backend.tools.inpaint_tools import create_mask
 
 # 定义图像预处理方式
 _to_tensors = transforms.Compose([
@@ -264,7 +266,6 @@ class STTNVideoInpaint:
             if input_sub_remover is not None:
                 writer = input_sub_remover.video_writer
             else:
-                # 创建视频写入对象，用于输出修复后的视频
                 writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
 
             total_frames = frame_info['len']
@@ -272,33 +273,35 @@ class STTNVideoInpaint:
             for i in range(total_frames):
                 success, frame = reader.read()
                 if not success:
-                    print(f"Warning: Failed to read frame {i}.")
                     all_frames.append(None)
                 else:
                     all_frames.append(frame)
 
-            # 标记每一帧是否已处理
             processed = [False] * total_frames
 
-            # 如果有字幕区域和帧区间列表，则按区间处理
+            # tqdm bar for overall progress if not provided
+            show_tqdm = tbar is None
+            if show_tqdm:
+                pbar = tqdm(total=total_frames, unit='frame', desc='STTN Subtitle Removal', position=0, file=sys.__stdout__)
+            else:
+                pbar = None
+
             if self.subtitle_areas is not None and self.frame_intervals is not None:
                 for idx, (interval, area) in enumerate(zip(self.frame_intervals, self.subtitle_areas)):
                     start, end = interval
-                    # 容错：确保索引在范围内
                     start = max(0, int(start))
                     end = min(total_frames - 1, int(end))
-                    # 收集该区间的帧
+                    print(f"[STTN] Start processing frames {start} to {end} (interval {idx+1}/{len(self.frame_intervals)})")
                     frames_to_inpaint = [all_frames[i] for i in range(start, end + 1) if all_frames[i] is not None]
                     if not frames_to_inpaint:
+                        print(f"[STTN] No valid frames found in interval {start}-{end}, skipping.")
                         continue
-                    # 构建mask
-                    mask = np.zeros((frame_info['H_ori'], frame_info['W_ori']), dtype=np.uint8)
-                    xmin, xmax, ymin, ymax = area
-                    mask[ymin:ymax, xmin:xmax] = 255
-                    mask = mask[:, :, None]
-                    # Inpaint
+                    mask_size = (frame_info['H_ori'], frame_info['W_ori'])
+                    print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
+                    mask = create_mask(mask_size, [area])
+                    if mask.ndim == 2:
+                        mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
-                    # 写回结果
                     j = 0
                     for i in range(start, end + 1):
                         if all_frames[i] is not None:
@@ -311,7 +314,9 @@ class STTNVideoInpaint:
                                     input_sub_remover.update_progress(tbar, increment=1)
                                 if input_sub_remover.gui_mode:
                                     input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
-            # 处理未被处理的帧（无字幕的帧，直接写原始帧）
+                            if show_tqdm:
+                                pbar.update(1)
+            # Write unprocessed frames as original
             for i in range(total_frames):
                 if not processed[i] and all_frames[i] is not None:
                     writer.write(all_frames[i])
@@ -320,9 +325,12 @@ class STTNVideoInpaint:
                             input_sub_remover.update_progress(tbar, increment=1)
                         if input_sub_remover.gui_mode:
                             input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], all_frames[i]])
+                    if show_tqdm:
+                        pbar.update(1)
+            if show_tqdm:
+                pbar.close()
         except Exception as e:
             print(f"Error during video processing: {str(e)}")
-            # 不抛出异常，允许程序继续执行
         finally:
             if writer:
                 writer.release()

@@ -767,22 +767,16 @@ class SubtitleRemover:
         使用sttn对选中区域进行重绘，不进行字幕检测
         """
         print('use sttn mode with no detection')
-        for i in range(len(self.frame_intervals)):
-            interval = self.frame_intervals[i]
-            start, end = interval[0], interval[1]
-            print(f'\n[Processing] start removing subtitles for frame {start} - {end}')
-            
-            xmin, xmax, ymin, ymax = self.distinct_coords[i]
-            print(f'[Info] Subtitle coordinates read from json file input as {(xmin, xmax, ymin, ymax)}.')
-            mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-            mask= create_mask(self.mask_size, mask_area_coordinates)
-
-            output_dir = f"output_cropped_{self.vd_name}_toframe_{end}"
-            # Crop the original video based on the frame intervals
-            crop_video_path = create_cropped_video(self.video_path, output_dir=output_dir, interval=interval)
-
-            sttn_video_inpaint = STTNVideoInpaint(crop_video_path)
-            sttn_video_inpaint(input_mask=mask, input_sub_remover=self, tbar=tbar)
+        # Prepare the list of intervals and corresponding coordinates
+        intervals = self.frame_intervals
+        coords = self.distinct_coords
+        # Pass all intervals and coordinates to STTNVideoInpaint at once
+        sttn_video_inpaint = STTNVideoInpaint(
+            self.video_path,
+            subtitle_areas=coords,
+            frame_intervals=intervals
+        )
+        sttn_video_inpaint(input_sub_remover=self, tbar=tbar)
 
     def sttn_mode(self, tbar):
         # 是否跳过字幕帧寻找
