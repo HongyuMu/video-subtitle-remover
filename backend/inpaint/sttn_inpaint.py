@@ -89,7 +89,6 @@ class STTNInpaint:
                     frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
                 # 将最终帧添加到列表
                 inpainted_frames.append(frame)
-                print(f'processing frame, {len(frames_hr) - j} left')
         return inpainted_frames
 
     @staticmethod
@@ -289,33 +288,44 @@ class STTNVideoInpaint:
             if self.subtitle_areas is not None and self.frame_intervals is not None:
                 for idx, (interval, area) in enumerate(zip(self.frame_intervals, self.subtitle_areas)):
                     start, end = interval
-                    start = max(0, int(start))
-                    end = min(total_frames - 1, int(end))
-                    print(f"[STTN] Start processing frames {start} to {end} (interval {idx+1}/{len(self.frame_intervals)})")
-                    frames_to_inpaint = [all_frames[i] for i in range(start, end + 1) if all_frames[i] is not None]
+
+                    # OpenCV reads from frame 0
+                    start = max(0, int(start) - 1)
+                    end = min(total_frames - 1, int(end) - 1)
+                    print(f"[STTN] Start processing frames {start} to {end + 1} (interval {idx+1}/{len(self.frame_intervals)})")
+                    frames_to_inpaint = []
+                    valid_indices = []
+
+                    # Get valid frames to inpaint
+                    for i in range(start, end + 1):
+                        if all_frames[i] is not None:
+                            frames_to_inpaint.append(all_frames[i])
+                            valid_indices.append(i)
                     if not frames_to_inpaint:
                         print(f"[STTN] No valid frames found in interval {start}-{end}, skipping.")
                         continue
                     mask_size = (frame_info['H_ori'], frame_info['W_ori'])
                     print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
                     mask = create_mask(mask_size, [area])
+
+                    # Convert mask to 3-channel format if needed
+                    # The 3-color-channel format is required for the inpaint function to color images
                     if mask.ndim == 2:
                         mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
-                    j = 0
-                    for i in range(start, end + 1):
-                        if all_frames[i] is not None:
-                            frame = inpainted_frames[j]
-                            writer.write(frame)
-                            processed[i] = True
-                            j += 1
-                            if input_sub_remover is not None:
-                                if tbar is not None:
-                                    input_sub_remover.update_progress(tbar, increment=1)
-                                if input_sub_remover.gui_mode:
-                                    input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
-                            if show_tqdm:
-                                pbar.update(1)
+
+                    # Write inpainted frames to video
+                    for idx, i in enumerate(valid_indices):
+                        frame = inpainted_frames[idx]
+                        writer.write(frame)
+                        processed[i] = True
+                        if input_sub_remover is not None:
+                            if tbar is not None:
+                                input_sub_remover.update_progress(tbar, increment=1)
+                            if input_sub_remover.gui_mode:
+                                input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
+                        if show_tqdm:
+                            pbar.update(1)
             # Write unprocessed frames as original
             for i in range(total_frames):
                 if not processed[i] and all_frames[i] is not None:
