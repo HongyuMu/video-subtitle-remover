@@ -854,32 +854,68 @@ class SubtitleRemover:
 
     def lama_mode(self, tbar):
         print('use lama mode')
-        sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
-        if self.lama_inpaint is None:
-            self.lama_inpaint = LamaInpaint()
-        index = 0
-        print('[Processing] start removing subtitles...')
-        while True:
-            ret, frame = self.video_cap.read()
-            if not ret:
-                break
-            original_frame = frame
-            index += 1
-            if index in sub_list.keys():
-                mask = create_mask(self.mask_size, sub_list[index])
-                if config.LAMA_SUPER_FAST:
-                    frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+        # If distinct_coords and frame_intervals are provided, use them for batch processing
+        if self.distinct_coords is not None and self.frame_intervals is not None:
+            intervals = self.frame_intervals
+            coords = self.distinct_coords
+            index = 0
+            print('[Processing] start removing subtitles...')
+            for i in range(len(intervals)):
+                interval = intervals[i]
+                start, end = interval[0], interval[1]
+                xmin, xmax, ymin, ymax = coords[i]
+                print(f'Processing frames {start} to {end} with mask {(xmin, xmax, ymin, ymax)}')
+                mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
+                mask = create_mask(self.mask_size, mask_area_coordinates)
+                # Set video to the start frame
+                self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, start - 1)
+                for frame_idx in range(start, end + 1):
+                    ret, frame = self.video_cap.read()
+                    if not ret:
+                        break
+                    original_frame = frame.copy()
+                    if self.lama_inpaint is None:
+                        self.lama_inpaint = LamaInpaint()
+                    if config.LAMA_SUPER_FAST:
+                        frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+                    else:
+                        frame = self.lama_inpaint(frame, mask)
+                    if self.gui_mode:
+                        self.preview_frame = cv2.hconcat([original_frame, frame])
+                    self.video_writer.write(frame)
+                    if tbar is not None:
+                        tbar.update(1)
+                    self.progress_remover = 100 * float(frame_idx) / float(self.frame_count) // 2
+                    self.progress_total = 50 + self.progress_remover
+        else:
+            # Fallback to original logic if no intervals/coords provided
+            sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
+            if self.lama_inpaint is None:
+                self.lama_inpaint = LamaInpaint()
+            index = 0
+            print('[Processing] start removing subtitles...')
+            while True:
+                ret, frame = self.video_cap.read()
+                if not ret:
+                    break
+                original_frame = frame
+                index += 1
+                if index in sub_list.keys():
+                    mask = create_mask(self.mask_size, sub_list[index])
+                    if config.LAMA_SUPER_FAST:
+                        frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+                    else:
+                        frame = self.lama_inpaint(frame, mask)
+                if self.gui_mode:
+                    self.preview_frame = cv2.hconcat([original_frame, frame])
+                if self.is_picture:
+                    cv2.imencode(self.ext, frame)[1].tofile(self.video_out_name)
                 else:
-                    frame = self.lama_inpaint(frame, mask)
-            if self.gui_mode:
-                self.preview_frame = cv2.hconcat([original_frame, frame])
-            if self.is_picture:
-                cv2.imencode(self.ext, frame)[1].tofile(self.video_out_name)
-            else:
-                self.video_writer.write(frame)
-            tbar.update(1)
-            self.progress_remover = 100 * float(index) / float(self.frame_count) // 2
-            self.progress_total = 50 + self.progress_remover
+                    self.video_writer.write(frame)
+                if tbar is not None:
+                    tbar.update(1)
+                self.progress_remover = 100 * float(index) / float(self.frame_count) // 2
+                self.progress_total = 50 + self.progress_remover
 
     def run(self):
         # 记录开始时间
