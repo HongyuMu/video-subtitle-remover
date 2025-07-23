@@ -1010,9 +1010,6 @@ if __name__ == '__main__':
             coords = json_data.get("distinct_coordinates")
             intervals = json_data.get("frame_intervals")
 
-            # OpenCV reads from frame 0
-            intervals[0][0] = 0
-
             sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
             sd.run()
         except FileNotFoundError:
