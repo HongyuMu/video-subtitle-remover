@@ -260,7 +260,6 @@ class STTNVideoInpaint:
         reader = None
         writer = None
         try:
-            # 读取视频帧信息
             reader, frame_info = self.read_frame_info_from_video()
             if input_sub_remover is not None:
                 writer = input_sub_remover.video_writer
@@ -276,7 +275,25 @@ class STTNVideoInpaint:
                 else:
                     all_frames.append(frame)
 
-            processed = [False] * total_frames
+            # Build a list of intervals as (start, end) tuples, 0-based
+            intervals_0_based = []
+            if self.frame_intervals is not None:
+                for interval in self.frame_intervals:
+                    s, e = interval
+                    s = max(0, int(s) - 1)
+                    e = min(total_frames - 1, int(e) - 1)
+                    intervals_0_based.append((s, e))
+
+            # Map each frame index to its interval index (if any)
+            frame_to_interval = {}
+            if intervals_0_based:
+                for idx, (s, e) in enumerate(intervals_0_based):
+                    for f in range(s, e + 1):
+                        frame_to_interval[f] = idx
+
+            # Prepare inpainting batches for each interval
+            interval_batches = [[] for _ in intervals_0_based]
+            interval_indices = [[] for _ in intervals_0_based]
 
             # tqdm bar for overall progress if not provided
             show_tqdm = tbar is None
@@ -285,60 +302,58 @@ class STTNVideoInpaint:
             else:
                 pbar = None
 
+            # First, collect all frames for inpainting or direct writing
+            for i in range(total_frames):
+                if all_frames[i] is None:
+                    continue
+                if i in frame_to_interval:
+                    idx = frame_to_interval[i]
+                    interval_batches[idx].append(all_frames[i])
+                    interval_indices[idx].append(i)
+
+            # Process each interval batch for inpainting and store results in a dict
+            inpainted_dict = {}
+            frames_processed = 0
             if self.subtitle_areas is not None and self.frame_intervals is not None:
-                for idx, (interval, area) in enumerate(zip(self.frame_intervals, self.subtitle_areas)):
-                    start, end = interval
-
-                    # OpenCV reads from frame 0
-                    start = max(0, int(start) - 1)
-                    end = min(total_frames - 1, int(end) - 1)
-                    print(f"[STTN] Start processing frames {start} to {end + 1} (interval {idx+1}/{len(self.frame_intervals)})")
-                    frames_to_inpaint = []
-                    valid_indices = []
-
-                    # Get valid frames to inpaint
-                    for i in range(start, end + 1):
-                        if all_frames[i] is not None:
-                            frames_to_inpaint.append(all_frames[i])
-                            valid_indices.append(i)
+                for idx, (frames_to_inpaint, valid_indices) in enumerate(zip(interval_batches, interval_indices)):
                     if not frames_to_inpaint:
-                        print(f"[STTN] No valid frames found in interval {start}-{end}, skipping.")
                         continue
+                    area = self.subtitle_areas[idx]
+                    s, e = intervals_0_based[idx]
+                    print(f"[STTN] Start processing frames {s} to {e + 1} (interval {idx+1}/{len(self.frame_intervals)})")
                     mask_size = (frame_info['H_ori'], frame_info['W_ori'])
                     print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
                     mask = create_mask(mask_size, [area])
-
-                    # Convert mask to 3-channel format if needed
-                    # The 3-color-channel format is required for the inpaint function to color images
                     if mask.ndim == 2:
                         mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
+                    for j, i_frame in enumerate(valid_indices):
+                        # Store the inpainted frame in the dictionary
+                        inpainted_dict[i_frame] = inpainted_frames[j]
+                    frames_processed += len(valid_indices)
+                    print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 
-                    # Write inpainted frames to video
-                    for idx, i in enumerate(valid_indices):
-                        frame = inpainted_frames[idx]
-                        writer.write(frame)
-                        processed[i] = True
-                        if input_sub_remover is not None:
-                            if tbar is not None:
-                                input_sub_remover.update_progress(tbar, increment=1)
-                            if input_sub_remover.gui_mode:
-                                input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
-                        if show_tqdm:
-                            pbar.update(1)
-            # Write unprocessed frames as original
+            # Now, write all frames in original order, using inpainted frames where available
             for i in range(total_frames):
-                if not processed[i] and all_frames[i] is not None:
-                    writer.write(all_frames[i])
-                    if input_sub_remover is not None:
-                        if tbar is not None:
-                            input_sub_remover.update_progress(tbar, increment=1)
-                        if input_sub_remover.gui_mode:
-                            input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], all_frames[i]])
+                if all_frames[i] is None:
                     if show_tqdm:
                         pbar.update(1)
+                    continue
+                if i in inpainted_dict:
+                    frame = inpainted_dict[i]
+                else:
+                    frame = all_frames[i]
+                writer.write(frame)
+                if input_sub_remover is not None:
+                    if tbar is not None:
+                        input_sub_remover.update_progress(tbar, increment=1)
+                    if input_sub_remover.gui_mode:
+                        input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
+                if show_tqdm:
+                    pbar.update(1)
             if show_tqdm:
                 pbar.close()
+            print(f"[STTN] All frames processed and written to output video. Total frames: {total_frames}")
         except Exception as e:
             print(f"Error during video processing: {str(e)}")
         finally:
