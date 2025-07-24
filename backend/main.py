@@ -19,7 +19,6 @@ from backend.inpaint.sttn_inpaint import STTNInpaint, STTNVideoInpaint
 from backend.inpaint.lama_inpaint import LamaInpaint
 from backend.inpaint.video_inpaint import VideoInpaint
 from backend.tools.inpaint_tools import create_mask, batch_generator
-from backend.tools.crop_video import create_cropped_video
 import importlib
 import platform
 import tempfile
@@ -618,7 +617,6 @@ class SubtitleRemover:
                 print('Warning: DirectML acceleration is only available for STTN model. Falling back to CPU for other models.')
         for provider in config.ONNX_PROVIDERS:
             print(f"Detected execution provider: {provider}")
-        self.progress_callback = None
 
 
         # 总处理进度
@@ -675,15 +673,8 @@ class SubtitleRemover:
     def update_progress(self, tbar, increment):
         tbar.update(increment)
         current_percentage = (tbar.n / tbar.total) * 100
-        # Single-stage if detection is skipped
-        if self.distinct_coords is not None and self.frame_intervals is not None:
-            self.progress_total = int(current_percentage)
-        else:
-            self.progress_remover = int(current_percentage) // 2
-            self.progress_total = 50 + self.progress_remover
-        # Call the callback if set
-        if self.progress_callback:
-            self.progress_callback(self.progress_total)
+        self.progress_remover = int(current_percentage) // 2
+        self.progress_total = 50 + self.progress_remover
 
     def propainter_mode(self, tbar):
         print('use propainter mode')

@@ -275,7 +275,7 @@ class STTNVideoInpaint:
                 else:
                     all_frames.append(frame)
 
-            # Build a list of intervals as (start, end) tuples, 0-based compatible with OpenCV
+            # Build a list of intervals as (start, end) tuples, 0-based
             intervals_0_based = []
             if self.frame_intervals is not None:
                 for interval in self.frame_intervals:
@@ -326,7 +326,8 @@ class STTNVideoInpaint:
                     print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
                     mask = create_mask(mask_size, [area])
 
-                    # Ensure mask has 3 channels (BGR)
+                    # Convert mask to 3-channel format if needed
+                    # The 3-color-channel format is required for the inpaint function to color images
                     if mask.ndim == 2:
                         mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)

@@ -26,6 +26,7 @@ def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
         temp_file.write(upload_file.file.read())
         return temp_file.name
 
+# Call the SubtitleDetect class functions to find subtitles
 @app.post("/find_subtitles/")
 async def find_subtitles(file: UploadFile = File(...)):
     # Use the original filename (without extension) for the output JSON
@@ -94,13 +95,14 @@ async def remove_subtitles(
         "download_url": f"/download_video/{processed_video_path.name}"
     }
 
+# Call the SubtitleRemover class to remove subtitles
 def process_video(video_path, json_path, output_path, status_file):
     try:
         with open(json_path, 'r') as f:
             json_data = json.load(f)
         coords = json_data.get("distinct_coordinates")
         intervals = json_data.get("frame_intervals")
-        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
+        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)       
         sd.run()
         shutil.copy2(sd.video_out_name, output_path)
         with open(status_file, 'w') as f:
