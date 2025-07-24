@@ -75,12 +75,14 @@ async def remove_subtitles(
 ):
     temp_video_path = save_temp_file(file)
     temp_json_path = save_temp_file(json_file, suffix=".json")
-    processed_video_path = PROCESSED_DIR / f"processed_{Path(temp_video_path).stem}.mp4"
-    status_file = PROCESSED_DIR / f"{Path(temp_video_path).stem}.status"
+    # Use the original filename (without extension) for output and status files
+    original_stem = Path(file.filename).stem
+    processed_video_path = PROCESSED_DIR / f"processed_{original_stem}.mp4"
+    status_file = PROCESSED_DIR / f"{original_stem}.status"
 
-    # Start background task
+    # Start background task, pass original_stem for naming
     background_tasks.add_task(
-        process_video_with_json,
+        process_video,
         temp_video_path,
         temp_json_path,
         processed_video_path,
@@ -92,7 +94,7 @@ async def remove_subtitles(
         "download_url": f"/download_video/{processed_video_path.name}"
     }
 
-def process_video_with_json(video_path, json_path, output_path, status_file):
+def process_video(video_path, json_path, output_path, status_file):
     try:
         with open(json_path, 'r') as f:
             json_data = json.load(f)

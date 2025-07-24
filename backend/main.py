@@ -618,6 +618,7 @@ class SubtitleRemover:
                 print('Warning: DirectML acceleration is only available for STTN model. Falling back to CPU for other models.')
         for provider in config.ONNX_PROVIDERS:
             print(f"Detected execution provider: {provider}")
+        self.progress_callback = None
 
 
         # 总处理进度
@@ -674,8 +675,15 @@ class SubtitleRemover:
     def update_progress(self, tbar, increment):
         tbar.update(increment)
         current_percentage = (tbar.n / tbar.total) * 100
-        self.progress_remover = int(current_percentage) // 2
-        self.progress_total = 50 + self.progress_remover
+        # Single-stage if detection is skipped
+        if self.distinct_coords is not None and self.frame_intervals is not None:
+            self.progress_total = int(current_percentage)
+        else:
+            self.progress_remover = int(current_percentage) // 2
+            self.progress_total = 50 + self.progress_remover
+        # Call the callback if set
+        if self.progress_callback:
+            self.progress_callback(self.progress_total)
 
     def propainter_mode(self, tbar):
         print('use propainter mode')
@@ -983,13 +991,22 @@ class SubtitleRemover:
             tbar.update(1)
             self.progress_total = 100
         else:
-            # 精准模式下，获取场景分割的帧号，进一步切割
-            if config.MODE == config.InpaintMode.PROPAINTER:
-                self.propainter_mode(tbar)
-            elif config.MODE == config.InpaintMode.STTN:
-                self.sttn_mode(tbar)
+            # If both are provided, skip detection and go straight to removal
+            if self.distinct_coords is not None and self.frame_intervals is not None:
+                if config.MODE == config.InpaintMode.PROPAINTER:
+                    self.propainter_mode(tbar)
+                elif config.MODE == config.InpaintMode.STTN:
+                    self.sttn_mode_with_no_detection(tbar)
+                else:
+                    self.lama_mode(tbar)
             else:
-                self.lama_mode(tbar)
+                # Otherwise, do detection-based workflow
+                if config.MODE == config.InpaintMode.PROPAINTER:
+                    self.propainter_mode(tbar)
+                elif config.MODE == config.InpaintMode.STTN:
+                    self.sttn_mode(tbar)
+                else:
+                    self.lama_mode(tbar)
         self.video_cap.release()
         self.video_writer.release()
         if not self.is_picture:
