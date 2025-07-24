@@ -275,7 +275,7 @@ class STTNVideoInpaint:
                 else:
                     all_frames.append(frame)
 
-            # Build a list of intervals as (start, end) tuples, 0-based
+            # Build a list of intervals as (start, end) tuples, 0-based compatible with OpenCV
             intervals_0_based = []
             if self.frame_intervals is not None:
                 for interval in self.frame_intervals:
@@ -285,6 +285,7 @@ class STTNVideoInpaint:
                     intervals_0_based.append((s, e))
 
             # Map each frame index to its interval index (if any)
+            # This avoids processing frames that are not in any interval (without subtitles)
             frame_to_interval = {}
             if intervals_0_based:
                 for idx, (s, e) in enumerate(intervals_0_based):
@@ -324,6 +325,8 @@ class STTNVideoInpaint:
                     mask_size = (frame_info['H_ori'], frame_info['W_ori'])
                     print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
                     mask = create_mask(mask_size, [area])
+
+                    # Ensure mask has 3 channels (BGR)
                     if mask.ndim == 2:
                         mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
@@ -334,6 +337,7 @@ class STTNVideoInpaint:
                     print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 
             # Now, write all frames in original order, using inpainted frames where available
+            # This ensures the output video has the same frame order as the input video
             for i in range(total_frames):
                 if all_frames[i] is None:
                     if show_tqdm:
