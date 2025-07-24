@@ -28,8 +28,11 @@ def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
 
 @app.post("/find_subtitles/")
 async def find_subtitles(file: UploadFile = File(...)):
+    # Use the original filename (without extension) for the output JSON
+    original_name = Path(file.filename).stem
     temp_video_path = save_temp_file(file)
     try:
+        # Detect subtitle locations and intervals
         subtitle_detect = SubtitleDetect(video_path=temp_video_path)
         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
         if not subtitle_frame_no_box_dict:
@@ -55,7 +58,8 @@ async def find_subtitles(file: UploadFile = File(...)):
             "distinct_coordinates": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous
         }
-        json_file_path = PROCESSED_FILES_DIR / f"{Path(temp_video_path).stem}_subtitles.json"
+        # Save as original_filename_sub.json
+        json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
         with open(json_file_path, "w") as json_file:
             json.dump(json_content, json_file, indent=4)
         return FileResponse(json_file_path, media_type="application/json", filename=json_file_path.name)
