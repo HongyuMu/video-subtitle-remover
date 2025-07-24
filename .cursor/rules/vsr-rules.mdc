@@ -1,4 +1,72 @@
 ---
+description: Best practices and patterns for robust, efficient, and extensible video subtitle removal in API and plugin contexts.
+globs: backend/**/*
 alwaysApply: true
 ---
-keep the comments that already exist in the file
+# Video Subtitle Removal Rules
+
+## 1. **Consistent Frame and Interval Handling**
+- Always convert frame intervals from 1-based (external/user/JSON) to 0-based (Python/OpenCV) at the API boundary.
+- When processing intervals, ensure that all frames are written to the output in the original order, with inpainted frames replacing only those in subtitle intervals.
+- Never skip or duplicate frames in the output video.
+
+**Example:**
+```python
+# Convert intervals to 0-based
+start = max(0, int(start) - 1)
+end = min(total_frames - 1, int(end) - 1)
+```
+
+## 2. **Mask Creation and Application**
+- Use a single, centralized function (e.g., `create_mask`) for all mask creation to ensure consistent padding and shape.
+- Always expand mask dimensions to (H, W, 1) before applying to color images.
+- When inpainting, ensure the mask covers the full subtitle area, with a configurable pixel deviation for robustness.
+
+**Example:**
+```python
+mask = create_mask(mask_size, [area])
+if mask.ndim == 2:
+    mask = mask[:, :, None]
+```
+
+## 3. **Batch Processing and Memory Management**
+- For batch inpainting (STTN, LAMA, ProPainter), process frames in batches according to the model’s memory constraints.
+- Release or clear large objects (e.g., frames, masks) after use to avoid memory leaks, especially in API or plugin contexts.
+
+## 4. **API/Plugin Integration**
+- All API endpoints must:
+  - Accept standard video and JSON formats.
+  - Return output files with names derived from the original input (e.g., `originalname_sub.json`, `processed_originalname.mp4`).
+  - Provide clear status and error messages.
+- When integrating as a plugin (e.g., for DIFY), expose a single entrypoint function that accepts video and subtitle JSON, and returns the processed video path or a download URL.
+
+## 5. **Progress and Logging**
+- Always provide progress updates (e.g., tqdm or status files) for long-running operations.
+- Log key events: start/end of processing, interval boundaries, errors, and output file locations.
+
+## 6. **Error Handling**
+- Catch and log all exceptions in API and background tasks.
+- Return user-friendly error messages in API responses.
+- Clean up all temporary files, even on error.
+
+## 7. **Extensibility**
+- All inpainting modes (STTN, LAMA, ProPainter) must support both detection-based and interval-based (JSON) workflows.
+- New inpainting models or modes should follow the same interface: accept a list of frames and a mask, return a list of inpainted frames.
+
+---
+
+# Rule Improvement Triggers
+
+- New inpainting models or mask strategies are added.
+- DIFY plugin integration introduces new API or data flow requirements.
+- Common bugs or user errors are observed in API/plugin usage.
+- Performance or memory issues are detected in batch processing.
+
+---
+
+# Documentation
+
+- Update this rule file whenever a new processing mode, API endpoint, or plugin integration pattern is introduced.
+- Link to external documentation for DIFY plugin standards and video processing best practices.
+alwaysApply: false
+---
