@@ -991,22 +991,13 @@ class SubtitleRemover:
             tbar.update(1)
             self.progress_total = 100
         else:
-            # If both are provided, skip detection and go straight to removal
-            if self.distinct_coords is not None and self.frame_intervals is not None:
-                if config.MODE == config.InpaintMode.PROPAINTER:
-                    self.propainter_mode(tbar)
-                elif config.MODE == config.InpaintMode.STTN:
-                    self.sttn_mode_with_no_detection(tbar)
-                else:
-                    self.lama_mode(tbar)
+            # 精准模式下，获取场景分割的帧号，进一步切割
+            if config.MODE == config.InpaintMode.PROPAINTER:
+                self.propainter_mode(tbar)
+            elif config.MODE == config.InpaintMode.STTN:
+                self.sttn_mode(tbar)
             else:
-                # Otherwise, do detection-based workflow
-                if config.MODE == config.InpaintMode.PROPAINTER:
-                    self.propainter_mode(tbar)
-                elif config.MODE == config.InpaintMode.STTN:
-                    self.sttn_mode(tbar)
-                else:
-                    self.lama_mode(tbar)
+                self.lama_mode(tbar)
         self.video_cap.release()
         self.video_writer.release()
         if not self.is_picture:
