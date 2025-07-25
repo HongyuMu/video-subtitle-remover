@@ -9,8 +9,8 @@
 - [x] Store these results for preview and editing.
 
 ## 3. Preview & Interactive Editing
-- [ ] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
-- [ ] Display these previews in a web UI or plugin interface.
+- [x] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
+- [x] Display these previews in a web UI or plugin interface.
 - [ ] Allow the user to adjust the bounding box for each interval (e.g., via sliders or drag handles).
 - [ ] When the user modifies a box at a frame, update the corresponding item in `distinct_coords` for that interval only.
 - [ ] Ensure changes are interval-specific: only the relevant interval's coordinates are updated.
