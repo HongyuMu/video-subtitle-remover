@@ -1,5 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pathlib import Path
 import os
 import json
@@ -12,6 +12,7 @@ import cv2
 import uuid
 import aiohttp
 import asyncio
+import io
 
 app = FastAPI()
 
@@ -104,12 +105,62 @@ async def find_subtitles(
         TASK_RESULTS[task_id] = {
             "distinct_coords": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous,
-            "original_filename": original_name
+            "original_filename": original_name,
+            "video_path": temp_video_path  # Make sure to keep this file until user is done!
         }
         return {"task_id": task_id}
     finally:
         if temp_video_path and os.path.exists(temp_video_path):
             os.remove(temp_video_path)
+
+
+# Draw subtitle boxes on the video for users to visualize and adjust later
+def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_idx):
+    """
+    Draws rectangles for all subtitle regions active at the current frame.
+    """
+    for coord, (start, end) in zip(distinct_coords, frame_intervals):
+        if coord is None:
+            continue
+        if start <= current_frame_idx <= end:
+            xmin, xmax, ymin, ymax = coord  # adjust order if needed
+            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+    return frame
+
+@app.get("/show_subtitle_box/{task_id}")
+async def show_subtitle_box(task_id: str, frame_idx: int = 0):
+    """
+    Returns a single video frame with subtitle boxes drawn, for the given frame index.
+    """
+    # Retrieve the result from TASK_RESULTS
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    video_path = result.get("video_path")
+    if not video_path or not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail="Video not found")
+    distinct_coords = result["distinct_coords"]
+    frame_intervals = result["frame_intervals"]
+
+    # Open the video and get the requested frame
+    cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    if frame_idx < 0 or frame_idx >= total_frames:
+        cap.release()
+        raise HTTPException(status_code=400, detail=f"frame_idx must be between 0 and {total_frames-1}")
+    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        raise HTTPException(status_code=404, detail="Frame not found")
+
+    # Draw the boxes
+    frame_with_boxes = draw_subtitle_boxes(frame, distinct_coords, frame_intervals, frame_idx)
+
+    # Encode as PNG for web display
+    _, buffer = cv2.imencode('.png', frame_with_boxes)
+    return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/png")
+
 
 @app.post("/remove_subtitles/")
 async def remove_subtitles(
@@ -157,6 +208,7 @@ def process_video(video_path, json_path, output_path, status_file):
             if os.path.exists(path):
                 os.remove(path)
 
+
 @app.get("/status/{status_filename}")
 async def get_status(status_filename: str):
     status_path = PROCESSED_DIR / status_filename
@@ -166,12 +218,14 @@ async def get_status(status_filename: str):
         status = f.read().strip()
     return JSONResponse(content={"status": status})
 
+
 @app.get("/download_video/{video_filename}")
 async def download_video(video_filename: str):
     video_path = PROCESSED_DIR / video_filename
     if not video_path.exists():
         return JSONResponse(content={"error": "Processed video file not found!"})
     return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
+
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
