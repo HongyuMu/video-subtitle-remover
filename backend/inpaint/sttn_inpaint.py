@@ -51,11 +51,13 @@ class STTNInpaint:
         # 确定去字幕的垂直高度部分
         split_h = int(W_ori * 3 / 16)
         inpaint_area = self.get_inpaint_area_by_mask(H_ori, split_h, mask)
+
         # 初始化帧存储变量
         # 高分辨率帧存储列表
         frames_hr = copy.deepcopy(input_frames)
         frames_scaled = {}  # 存放缩放后帧的字典
         comps = {}  # 存放补全后帧的字典
+
         # 存储最终的视频帧
         inpainted_frames = []
         for k in range(len(inpaint_area)):
@@ -69,19 +71,36 @@ class STTNInpaint:
                 image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]  # 切割
                 image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))  # 缩放
                 frames_scaled[k].append(image_resize)  # 将缩放后的帧添加到对应列表
+        print(f"[DEBUG] frames_scaled keys: {list(frames_scaled.keys())}")
 
         # 处理每一个去除部分
         for k in range(len(inpaint_area)):
             # 调用inpaint函数进行处理
+            print(f"Type of frames_scaled[k]: {type(frames_scaled[k])}")
+            print(f"frames_scaled[k]: {frames_scaled[k]}")
             comps[k] = self.inpaint(frames_scaled[k])
-
+        print(f"[DEBUG] comps keys: {list(comps.keys())}")
         # 如果存在去除部分
         if inpaint_area:
             for j in range(len(frames_hr)):
                 frame = frames_hr[j]  # 取出原始帧
                 # 对于模式中的每一个段落
                 for k in range(len(inpaint_area)):
-                    comp = cv2.resize(comps[k][j], (W_ori, split_h))  # 将补全帧缩放回原大小
+                    print(f"[DEBUG] comps keys: {list(comps.keys())}")
+                    print(f"[DEBUG] k: {k}, j: {j}")
+                    if k in comps:
+                        print(f"[DEBUG] comps[{k}] length: {len(comps[k])}")
+                        if j < len(comps[k]):
+                            print(f"[DEBUG] comps[{k}][{j}] shape: {getattr(comps[k][j], 'shape', 'None')}")
+                        else:
+                            print(f"[ERROR] j={j} out of range for comps[{k}]")
+                    else:
+                        print(f"[ERROR] k={k} not in comps")
+                    try:
+                        comp = cv2.resize(comps[k][j], (W_ori, split_h))
+                    except Exception as e:
+                        print(f"[ERROR] Exception in cv2.resize: {e}")
+                        raise
                     comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)  # 转换颜色空间
                     # 获取遮罩区域并进行图像合成
                     mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]  # 取出遮罩区域
@@ -332,6 +351,7 @@ class STTNVideoInpaint:
                         mask = mask[:, :, None]
                     inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
                     for j, i_frame in enumerate(valid_indices):
+                        print(f"valid_indices: {len(valid_indices)}")
                         # Store the inpainted frame in the dictionary
                         inpainted_dict[i_frame] = inpainted_frames[j]
                     frames_processed += len(valid_indices)

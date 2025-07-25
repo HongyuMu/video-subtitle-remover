@@ -8,7 +8,6 @@ import cv2
 import sys
 import json
 from functools import cached_property
-from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -966,6 +965,15 @@ class SubtitleRemover:
         start_time = time.time()
         # 重置进度条
         self.progress_total = 0
+        if self.sub_area is not None:
+            """
+            User provided a fixed subtitle area
+            Use the area for all frames (or a range, as needed)
+            Example: treat the whole video as one interval
+            """
+            self.distinct_coords = [self.sub_area]
+            self.frame_intervals = [(1, self.frame_count)]
+            print(f"[User Area] Using user-provided subtitle area for all frames: {self.sub_area}")
         tbar = tqdm(total=int(self.frame_count), unit='frame', position=0, file=sys.__stdout__,
                     desc='Subtitle Removing')
         if self.is_picture:
@@ -992,24 +1000,6 @@ class SubtitleRemover:
                 self.lama_mode(tbar)
         self.video_cap.release()
         self.video_writer.release()
-        
-        # --- Bitrate fix: re-encode with original bitrate using ffmpeg ---
-        if not self.is_picture and os.path.exists(self.video_temp_file.name):
-            orig_bitrate = get_video_bitrate(self.video_path)
-            if orig_bitrate:
-                print(f"[Bitrate Fix] Re-encoding output to match original bitrate: {orig_bitrate} bps")
-                try:
-                    reencode_with_bitrate(self.video_temp_file.name, self.video_out_name, orig_bitrate)
-                    actual_bitrate = get_video_bitrate(self.video_out_name)
-                    print(f"[Bitrate Check] Actual video bitrate after re-encode: {actual_bitrate} bps")
-                except Exception as e:
-                    print(f"[Bitrate Fix] FFmpeg re-encode failed: {e}. Copying temp file instead.")
-                    shutil.copy2(self.video_temp_file.name, self.video_out_name)
-            else:
-                print("[Bitrate Fix] Could not determine original bitrate. Copying temp file.")
-                shutil.copy2(self.video_temp_file.name, self.video_out_name)
-        # --- End bitrate fix ---
-
         if not self.is_picture:
             # 将原音频合并到新生成的视频文件中
             self.merge_audio_to_video()
@@ -1042,19 +1032,15 @@ class SubtitleRemover:
             print('fail to extract audio')
             return
         else:
-            if os.path.exists(self.video_out_name):
+            if os.path.exists(self.video_temp_file.name):
                 audio_merge_command = [config.FFMPEG_PATH,
-                                       "-y", "-i", self.video_out_name,
+                                       "-y", "-i", self.video_temp_file.name,
                                        "-i", temp.name,
-                                       "-c:v", "copy",
-                                       "-c:a", "copy",
-                                       "-loglevel", "error", self.video_out_name + ".withaudio.mp4"]
-                # Optionally, replace the original output with the new one
-                final_output = self.video_out_name
+                                       "-vcodec", "libx264" if config.USE_H264 else "copy",
+                                       "-acodec", "copy",
+                                       "-loglevel", "error", self.video_out_name]
                 try:
                     subprocess.check_output(audio_merge_command, stdin=open(os.devnull), shell=use_shell)
-                    # Replace the original output with the new one
-                    os.replace(self.video_out_name + ".withaudio.mp4", self.video_out_name)
                 except Exception:
                     print('fail to merge audio')
                     return
@@ -1075,44 +1061,21 @@ class SubtitleRemover:
                 except IOError as e:
                     print("Unable to copy file. %s" % e)
             self.video_temp_file.close()
+    
+def find_smallest_bounding_box(coordinates):
+    # Initialize min and max values based on the first box
+    xmin = xmax = coordinates[0][0]
+    ymin = ymax = coordinates[0][2]
 
-def get_video_bitrate(video_path: str) -> Optional[int]:
-    """Extract the video bitrate (in bits per second) using ffprobe. Returns None if not found."""
-    cmd = [
-        "ffprobe", "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=bit_rate", "-of", "json", video_path
-    ]
-    try:
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        info = json.loads(result.stdout)
-        bitrate = info['streams'][0].get('bit_rate')
-        if bitrate is not None:
-            return int(bitrate)
-    except Exception:
-        pass
-    return None
+    # Loop through all the coordinates to find the overall bounding box
+    for box in coordinates:
+        xmin = min(xmin, box[0])
+        xmax = max(xmax, box[1])
+        ymin = min(ymin, box[2])
+        ymax = max(ymax, box[3])
 
-def reencode_with_bitrate(input_path: str, output_path: str, bitrate: int):
-    """Re-encode the video using ffmpeg with the specified bitrate (in bits per second)."""
-    # Calculate bufsize as 2x bitrate (in bits)
-    bufsize = str(bitrate * 2)
-    bitrate_str = str(bitrate)
-    cmd = [
-        config.FFMPEG_PATH,
-        "-y", "-i", input_path,
-        "-b:v", bitrate_str,
-        "-minrate", bitrate_str,
-        "-maxrate", bitrate_str,
-        "-bufsize", bufsize,
-        "-preset", "veryfast",
-        "-movflags", "+faststart",
-        "-c:v", "libx264" if config.USE_H264 else "mpeg4",
-        "-c:a", "copy",
-        "-loglevel", "error",
-        output_path
-    ]
-    use_shell = True if os.name == "nt" else False
-    subprocess.run(cmd, check=True, shell=use_shell)
+    # Return the bounding box as a tuple
+    return (xmin, xmax, ymin, ymax)
 
 
 if __name__ == '__main__':
