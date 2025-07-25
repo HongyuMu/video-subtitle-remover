@@ -72,8 +72,7 @@ async def find_subtitles(file: UploadFile = File(...)):
 async def remove_subtitles(
     file: UploadFile = File(...),
     json_file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks()
-):
+    background_tasks: BackgroundTasks = BackgroundTasks()):
     temp_video_path = save_temp_file(file)
     temp_json_path = save_temp_file(json_file, suffix=".json")
     # Use the original filename (without extension) for output and status files

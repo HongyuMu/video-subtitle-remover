@@ -1,0 +1,44 @@
+# Plugin Subtitle Removal TODO List
+
+## 1. User Input & Video Loading
+- [ ] Accept video input via URL or cloud storage (e.g., Google Drive, Dropbox, S3).
+- [ ] Download or access the video for processing.
+
+## 2. Subtitle Detection & Interval Extraction
+- [ ] Run subtitle detection (as in `find_subtitles`) to get `distinct_coords` and `frame_intervals`.
+- [ ] Store these results for preview and editing.
+
+## 3. Preview & Interactive Editing
+- [ ] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
+- [ ] Display these previews in a web UI or plugin interface.
+- [ ] Allow the user to adjust the bounding box for each interval (e.g., via sliders or drag handles).
+- [ ] When the user modifies a box at a frame, update the corresponding item in `distinct_coords` for that interval only.
+- [ ] Ensure changes are interval-specific: only the relevant interval's coordinates are updated.
+
+## 4. Confirmation & Processing
+- [ ] Provide a "Finish Selection" or "Confirm" button for the user to finalize their edits.
+- [ ] On confirmation, call the subtitle removal process (`remove_subtitles`) with the user-edited `distinct_coords` and `frame_intervals`.
+- [ ] Show progress and allow the user to download or view the processed video when done.
+
+## 5. Flexibility & UX
+- [ ] Support editing of multiple intervals independently.
+- [ ] Allow the user to reset or undo changes to any interval.
+- [ ] (Optional) Allow adding/removing intervals if detection missed or over-segmented.
+
+## 6. API/Plugin Integration
+- [ ] Expose endpoints or plugin hooks for all steps: detection, preview, editing, confirmation, processing, and download.
+- [ ] Ensure all steps are stateless and can be called independently (for web/plugin use).
+
+## 7. Documentation & Testing
+- [ ] Document the workflow for both users and developers.
+- [ ] Provide test cases for detection, editing, and processing.
+
+---
+# Notes
+- The user should never have to edit a giant JSON or all intervals at once—editing is per-interval and visual.
+- The system should be robust to partial edits (e.g., only some intervals are changed).
+- This rule serves as a living checklist for the plugin development process.
+description:
+globs:
+alwaysApply: false
+---
