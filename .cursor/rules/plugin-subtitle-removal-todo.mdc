@@ -1,12 +1,12 @@
 # Plugin Subtitle Removal TODO List
 
 ## 1. User Input & Video Loading
-- [ ] Accept video input via URL or cloud storage (e.g., Google Drive, Dropbox, S3).
-- [ ] Download or access the video for processing.
+- [x] Accept video input via URL or cloud storage (e.g., Google Drive, Dropbox, S3).
+- [x] Download or access the video for processing.
 
 ## 2. Subtitle Detection & Interval Extraction
-- [ ] Run subtitle detection (as in `find_subtitles`) to get `distinct_coords` and `frame_intervals`.
-- [ ] Store these results for preview and editing.
+- [x] Run subtitle detection (as in `find_subtitles`) to get `distinct_coords` and `frame_intervals`.
+- [x] Store these results for preview and editing.
 
 ## 3. Preview & Interactive Editing
 - [ ] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
@@ -37,7 +37,7 @@
 # Notes
 - The user should never have to edit a giant JSON or all intervals at once—editing is per-interval and visual.
 - The system should be robust to partial edits (e.g., only some intervals are changed).
-- This rule serves as a living checklist for the plugin development process.
+- This rule serves as a living checklist for the plugin development process. When the square bracket is marked with a "x", it signifies completion of the step.
 description:
 globs:
 alwaysApply: false
