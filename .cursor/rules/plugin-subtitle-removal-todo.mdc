@@ -11,6 +11,7 @@
 ## 3. Preview & Interactive Editing
 - [x] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
 - [x] Display these previews in a web UI or plugin interface.
+- [x] Create `/show_subtitle_box/{task_id}?frame_idx=X` endpoint for frame-by-frame preview.
 - [ ] Allow the user to adjust the bounding box for each interval (e.g., via sliders or drag handles).
 - [ ] When the user modifies a box at a frame, update the corresponding item in `distinct_coords` for that interval only.
 - [ ] Ensure changes are interval-specific: only the relevant interval's coordinates are updated.
@@ -32,6 +33,16 @@
 ## 7. Documentation & Testing
 - [ ] Document the workflow for both users and developers.
 - [ ] Provide test cases for detection, editing, and processing.
+
+## 8. Memory & Processing Time Optimization (For Coze Plugin)
+- [ ] Implement file size limits (max 50MB per video) to prevent memory overflow.
+- [ ] Add memory monitoring and warnings when approaching limits (80% of 512MB).
+- [ ] Implement chunked downloads to prevent large file downloads from blocking.
+- [ ] Add timeout handling for long-running subtitle detection operations.
+- [ ] Consider external storage (S3, etc.) instead of local files for serverless environments.
+- [ ] Make the system stateless by removing TASK_RESULTS dependency.
+- [ ] Add rate limiting to prevent abuse and resource exhaustion.
+- [ ] Implement automatic cleanup of temporary files to prevent disk space issues.
 
 ---
 # Notes
