@@ -13,6 +13,7 @@ import uuid
 import aiohttp
 import asyncio
 import io
+import time
 
 app = FastAPI()
 
@@ -26,6 +27,32 @@ PROCESSED_FILES_DIR = Path("processed_files")
 PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 
 TASK_RESULTS = {}
+
+def cleanup_old_tasks():
+    """Clean up old tasks and their associated files to prevent memory leaks"""
+    import time
+    current_time = time.time()
+    # Keep tasks for 30 minutes (1800 seconds) - shorter for memory efficiency
+    max_age = 3600
+    
+    tasks_to_remove = []
+    for task_id, result in TASK_RESULTS.items():
+        # Check if task has a timestamp (add one if not present)
+        if 'timestamp' not in result:
+            result['timestamp'] = current_time
+        elif current_time - result['timestamp'] > max_age:
+            tasks_to_remove.append(task_id)
+    
+    for task_id in tasks_to_remove:
+        result = TASK_RESULTS.pop(task_id)
+        # Clean up the video file
+        video_path = result.get('video_path')
+        if video_path and os.path.exists(video_path):
+            try:
+                os.remove(video_path)
+                print(f"Cleaned up old task: {task_id}")
+            except Exception:
+                pass  # Ignore cleanup errors
 
 def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -61,8 +88,6 @@ async def find_subtitles(
         await download_file(url, temp_video_path)
     elif cloud_ref:
         # Assuming cloud_ref is a URL or a cloud storage path
-        # For simplicity, we'll just use the original name as a placeholder for now
-        # In a real scenario, you'd download from cloud_ref to temp_video_path
         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
         await download_file(cloud_ref, temp_video_path)
     else:
@@ -106,12 +131,16 @@ async def find_subtitles(
             "distinct_coords": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous,
             "original_filename": original_name,
-            "video_path": temp_video_path  # Make sure to keep this file until user is done!
+            "video_path": temp_video_path,  # Make sure to keep this file until user is done!
+            "timestamp": time.time()
         }
         return {"task_id": task_id}
-    finally:
+
+    except Exception as e:
+        print("Error in find_subtitles: ", e)
         if temp_video_path and os.path.exists(temp_video_path):
             os.remove(temp_video_path)
+        raise e
 
 
 # Draw subtitle boxes on the video for users to visualize and adjust later
@@ -132,6 +161,9 @@ async def show_subtitle_box(task_id: str, frame_idx: int = 0):
     """
     Returns a single video frame with subtitle boxes drawn, for the given frame index.
     """
+    # Clean up old tasks first
+    cleanup_old_tasks()
+    
     # Retrieve the result from TASK_RESULTS
     result = TASK_RESULTS.get(task_id)
     if not result:
