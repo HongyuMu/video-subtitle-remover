@@ -55,7 +55,7 @@ def cleanup_old_tasks():
     """Clean up old tasks and their associated files to prevent memory leaks"""
     import time
     current_time = time.time()
-    # Keep tasks for 30 minutes (1800 seconds) - shorter for memory efficiency
+    # Keep tasks for 30 minutes (3600 seconds) - shorter for memory efficiency
     max_age = 3600
     
     tasks_to_remove = []
@@ -193,9 +193,19 @@ def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_i
     return frame
 
 @app.get("/show_subtitle_box/{task_id}")
-async def show_subtitle_box(task_id: str, frame_idx: int = 0):
+async def show_subtitle_box(
+    task_id: str, 
+    frame_idx: int = 0,
+    edit_mode: bool = False,
+    interval_idx: int = None,
+    xmin: int = None,
+    xmax: int = None,
+    ymin: int = None,
+    ymax: int = None
+):
     """
     Returns a single video frame with subtitle boxes drawn, for the given frame index.
+    Supports interactive editing of bounding boxes by interval indices.
     """
     # Clean up old tasks first
     cleanup_old_tasks()
@@ -213,6 +223,15 @@ async def show_subtitle_box(task_id: str, frame_idx: int = 0):
     # Check memory before loading video
     if not check_memory_usage():
         raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
+    
+    # Handle coordinate updates if in edit mode
+    if edit_mode and interval_idx is not None and all(v is not None for v in [xmin, xmax, ymin, ymax]):
+        if 0 <= interval_idx < len(distinct_coords):
+            # Update the coordinates for the specific interval
+            distinct_coords[interval_idx] = (xmin, xmax, ymin, ymax)
+            # Update the stored result
+            TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
+            print(f"Updated coordinates for interval {interval_idx}: ({xmin}, {xmax}, {ymin}, {ymax})")
     
     # Open the video and get the requested frame
     cap = cv2.VideoCapture(video_path)
