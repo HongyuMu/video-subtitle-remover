@@ -6,6 +6,7 @@ import json
 import shutil
 import tempfile
 from backend.main import SubtitleRemover, SubtitleDetect
+import backend.config as config
 from typing import Optional
 import uvicorn
 import cv2
@@ -362,6 +363,119 @@ async def download_video(video_filename: str):
     if not video_path.exists():
         return JSONResponse(content={"error": "Processed video file not found!"})
     return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
+
+
+def merge_intervals(intervals, distinct_coords):
+    """
+    Merge intervals that have similar coordinates.
+    Returns new intervals and distinct_coords with merged similar regions.
+    Uses config.PIXEL_TOLERANCE_X and config.PIXEL_TOLERANCE_Y for similarity comparison.
+    """
+    if not intervals or not distinct_coords:
+        return intervals, distinct_coords
+    
+    # Create a mapping of intervals to their coordinates
+    interval_coords = list(zip(intervals, distinct_coords))
+    
+    # Group similar intervals
+    merged_groups = []
+    used_indices = set()
+    
+    for i, (interval1, coords1) in enumerate(interval_coords):
+        if i in used_indices:
+            continue
+            
+        # Start a new group
+        current_group = [(interval1, coords1)]
+        used_indices.add(i)
+        
+        # Find all similar intervals
+        for j, (interval2, coords2) in enumerate(interval_coords[i+1:], i+1):
+            if j in used_indices:
+                continue
+                
+            if SubtitleDetect.are_similar(coords1, coords2):
+                current_group.append((interval2, coords2))
+                used_indices.add(j)
+        
+        # Merge the group
+        if len(current_group) > 1:
+            # Sort by start frame
+            current_group.sort(key=lambda x: x[0][0])
+            
+            # Merge intervals
+            merged_start = current_group[0][0][0]
+            merged_end = current_group[-1][0][1]
+            merged_interval = (merged_start, merged_end)
+            
+            # Use the first coordinates (or could average them)
+            merged_coords = current_group[0][1]
+            
+            merged_groups.append((merged_interval, merged_coords))
+        else:
+            # Single interval, keep as is
+            merged_groups.append((interval1, coords1))
+    
+    # Sort by start frame
+    merged_groups.sort(key=lambda x: x[0][0])
+    
+    # Unpack results
+    new_intervals = [group[0] for group in merged_groups]
+    new_distinct_coords = [group[1] for group in merged_groups]
+    
+    return new_intervals, new_distinct_coords
+
+@app.post("/merge_similar_intervals/{task_id}")
+async def merge_similar_intervals(task_id: str):
+    """
+    Merge intervals that have similar coordinates after user edits.
+    Uses config.PIXEL_TOLERANCE_X and config.PIXEL_TOLERANCE_Y for similarity comparison.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    distinct_coords = result.get("distinct_coords", [])
+    frame_intervals = result.get("frame_intervals", [])
+    
+    if not distinct_coords or not frame_intervals:
+        raise HTTPException(status_code=400, detail="No intervals to merge")
+    
+    # Merge similar intervals
+    new_intervals, new_distinct_coords = merge_intervals(
+        frame_intervals, 
+        distinct_coords
+    )
+    
+    # Update the task results
+    result["frame_intervals"] = new_intervals
+    result["distinct_coords"] = new_distinct_coords
+    
+    # Update the JSON file if it exists
+    original_name = result.get("original_filename", "unknown")
+    json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
+    
+    if json_file_path.exists():
+        json_content = {
+            "distinct_coordinates": new_distinct_coords,
+            "frame_intervals": new_intervals
+        }
+        with open(json_file_path, "w") as json_file:
+            json.dump(json_content, json_file, indent=4)
+    
+    return {
+        "message": f"Merged {len(frame_intervals)} intervals into {len(new_intervals)} intervals",
+        "original_count": len(frame_intervals),
+        "merged_count": len(new_intervals),
+        "intervals": [
+            {
+                "interval_idx": idx,
+                "frame_range": interval,
+                "coords": coords
+            }
+            for idx, (interval, coords) in enumerate(zip(new_intervals, new_distinct_coords))
+        ]
+    }
 
 
 if __name__ == "__main__":
