@@ -15,6 +15,7 @@ import asyncio
 import io
 import time
 import psutil
+from pydantic import BaseModel
 
 app = FastAPI()
 
@@ -37,8 +38,8 @@ def check_memory_usage():
         memory_info = process.memory_info()
         memory_mb = memory_info.rss / 1024 / 1024
         
-        # For Coze, assume 512MB limit
-        memory_limit_mb = 512
+        # Assume 1024MB limit
+        memory_limit_mb = 1024
         memory_percentage = (memory_mb / memory_limit_mb) * 100
         
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
@@ -167,7 +168,7 @@ async def find_subtitles(
             "distinct_coords": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous,
             "original_filename": original_name,
-            "video_path": temp_video_path,  # Make sure to keep this file until user is done!
+            "video_path": temp_video_path,
             "timestamp": time.time()
         }
         return {"task_id": task_id}
@@ -177,6 +178,28 @@ async def find_subtitles(
         if temp_video_path and os.path.exists(temp_video_path):
             os.remove(temp_video_path)
         raise e
+
+
+@app.get("/subtitle_intervals/{task_id}")
+async def get_subtitle_intervals(task_id: str):
+    """
+    Returns all intervals and their current rectangles for a given task_id.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    intervals = []
+    distinct_coords = result.get("distinct_coords", [])
+    frame_intervals = result.get("frame_intervals", [])
+    # Optionally, track which intervals have been edited (not implemented yet)
+    for idx, (coords, frame_range) in enumerate(zip(distinct_coords, frame_intervals)):
+        intervals.append({
+            "interval_idx": idx,
+            "frame_range": frame_range,
+            "coords": coords,
+            # "edited": False  # Could be added if you want to track edits
+        })
+    return {"intervals": intervals}
 
 
 # Draw subtitle boxes on the video for users to visualize and adjust later
@@ -251,6 +274,29 @@ async def show_subtitle_box(
     # Encode as PNG for web display
     _, buffer = cv2.imencode('.png', frame_with_boxes)
     return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/png")
+
+
+class EditSubtitleBoxRequest(BaseModel):
+    interval_idx: int
+    coords: list  # [xmin, xmax, ymin, ymax]
+
+@app.post("/edit_subtitle_box/{task_id}")
+async def edit_subtitle_box(task_id: str, req: EditSubtitleBoxRequest):
+    """
+    Update the rectangle for a specific interval in distinct_coords.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    distinct_coords = result.get("distinct_coords", [])
+    if not (0 <= req.interval_idx < len(distinct_coords)):
+        raise HTTPException(status_code=400, detail="Invalid interval_idx")
+    # Update the rectangle
+    distinct_coords[req.interval_idx] = req.coords
+    # Optionally, mark as edited
+    # result.setdefault("edited_intervals", set()).add(req.interval_idx)
+    TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
+    return {"message": f"Interval {req.interval_idx} updated.", "coords": req.coords}
 
 
 @app.post("/remove_subtitles/")
