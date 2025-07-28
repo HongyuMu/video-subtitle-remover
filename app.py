@@ -44,7 +44,7 @@ def check_memory_usage():
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
         
         if memory_percentage > 80:
-            print(f"⚠️ WARNING: Memory usage at {memory_percentage:.1f}%")
+            print(f"WARNING: Memory usage at {memory_percentage:.1f}%")
             return False
         return True
     except Exception:
