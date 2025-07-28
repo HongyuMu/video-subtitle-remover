@@ -75,10 +75,16 @@ class STTNInpaint:
 
         # 处理每一个去除部分
         for k in range(len(inpaint_area)):
-            # 调用inpaint函数进行处理
-            print(f"Type of frames_scaled[k]: {type(frames_scaled[k])}")
-            print(f"frames_scaled[k]: {frames_scaled[k]}")
-            comps[k] = self.inpaint(frames_scaled[k])
+            try:
+                print(f"[DEBUG] About to call inpaint for k={k}, len(frames_scaled[k])={len(frames_scaled[k])}")
+                if len(frames_scaled[k]) > 0:
+                    print(f"[DEBUG] frames_scaled[{k}][0] shape: {frames_scaled[k][0].shape}, dtype: {frames_scaled[k][0].dtype}")
+                comps[k] = self.inpaint(frames_scaled[k])
+            except Exception as e:
+                print(f"[ERROR] Exception in self.inpaint(frames_scaled[{k}]): {e}")
+                import traceback
+                traceback.print_exc()
+                raise
         print(f"[DEBUG] comps keys: {list(comps.keys())}")
         # 如果存在去除部分
         if inpaint_area:
@@ -144,6 +150,12 @@ class STTNInpaint:
         feats = feats.to(self.device)
         # 初始化一个与视频长度相同的列表，用于存储处理完成的帧
         comp_frames = [None] * frame_length
+            
+        # Try to process in smaller batches if we have too many frames
+        if frame_length > config.STTN_MAX_LOAD_NUM:
+            print(f"[INFO] Processing frames in batches of {config.STTN_MAX_LOAD_NUM}")
+            return self._process_in_batches(frames, config.STTN_MAX_LOAD_NUM)
+        
         # 关闭梯度计算，用于推理阶段节省内存并加速
         with torch.no_grad():
             # 将处理好的帧通过编码器，产生特征表示
@@ -182,6 +194,35 @@ class STTNInpaint:
                         comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
         # 返回处理完成的帧序列
         return comp_frames
+
+    def _process_in_batches(self, frames: List[np.ndarray], batch_size: int) -> List[np.ndarray]:
+        """
+        Process frames in smaller batches to avoid memory issues
+        """
+        print(f"[INFO] Processing {len(frames)} frames in batches of {batch_size}")
+        all_processed_frames = []
+        
+        for i in range(0, len(frames), batch_size):
+            batch_frames = frames[i:i + batch_size]
+            print(f"[INFO] Processing batch {i//batch_size + 1}/{(len(frames) + batch_size - 1)//batch_size}")
+            try:
+                batch_result = self.inpaint(batch_frames)
+                all_processed_frames.extend(batch_result)
+            except Exception as e:
+                print(f"[ERROR] Failed to process batch {i//batch_size + 1}: {e}")
+                # If batch processing fails, try with CPU
+                print(f"[INFO] Trying with CPU...")
+                original_device = self.device
+                self.device = torch.device("cpu")
+                self.model = self.model.to("cpu")
+                try:
+                    batch_result = self.inpaint(batch_frames)
+                    all_processed_frames.extend(batch_result)
+                finally:
+                    self.device = original_device
+                    self.model = self.model.to(original_device)
+        
+        return all_processed_frames
 
     @staticmethod
     def get_inpaint_area_by_mask(H, h, mask):
@@ -349,11 +390,41 @@ class STTNVideoInpaint:
                     # The 3-color-channel format is required for the inpaint function to color images
                     if mask.ndim == 2:
                         mask = mask[:, :, None]
-                    inpainted_frames = self.sttn_inpaint(frames_to_inpaint, mask)
+                    
+                    # Process frames in batches to avoid memory issues
+                    batch_size = config.STTN_MAX_LOAD_NUM
+                    inpainted_frames = []
+                    
+                    for batch_start in range(0, len(frames_to_inpaint), batch_size):
+                        batch_end = min(batch_start + batch_size, len(frames_to_inpaint))
+                        batch_frames = frames_to_inpaint[batch_start:batch_end]
+                        print(f"[STTN] Processing batch {batch_start//batch_size + 1}/{(len(frames_to_inpaint) + batch_size - 1)//batch_size} ({len(batch_frames)} frames)")
+                        
+                        try:
+                            batch_result = self.sttn_inpaint(batch_frames, mask)
+                            inpainted_frames.extend(batch_result)
+                        except Exception as e:
+                            print(f"[ERROR] Failed to process batch: {e}")
+                            print(f"[INFO] Trying with CPU...")
+                            # Fallback to CPU if GPU fails
+                            original_device = self.sttn_inpaint.device
+                            self.sttn_inpaint.device = torch.device("cpu")
+                            self.sttn_inpaint.model = self.sttn_inpaint.model.to("cpu")
+                            try:
+                                batch_result = self.sttn_inpaint(batch_frames, mask)
+                                inpainted_frames.extend(batch_result)
+                            finally:
+                                self.sttn_inpaint.device = original_device
+                                self.sttn_inpaint.model = self.sttn_inpaint.model.to(original_device)
+                    
                     for j, i_frame in enumerate(valid_indices):
-                        print(f"valid_indices: {len(valid_indices)}")
-                        # Store the inpainted frame in the dictionary
-                        inpainted_dict[i_frame] = inpainted_frames[j]
+                        if j < len(inpainted_frames):
+                            # Store the inpainted frame in the dictionary
+                            inpainted_dict[i_frame] = inpainted_frames[j]
+                        else:
+                            # 如果帧没有被处理，则使用原始帧
+                            print(f"[WARNING] Frame {i_frame} not processed - using original frame")
+                            inpainted_dict[i_frame] = all_frames[i_frame]
                     frames_processed += len(valid_indices)
                     print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 

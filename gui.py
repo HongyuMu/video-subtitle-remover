@@ -15,6 +15,7 @@ import multiprocessing
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import backend.main
+import backend.config
 from backend.tools.common_tools import is_image_file
 
 
@@ -70,8 +71,15 @@ class SubtitleRemoverGUI:
         # 创建布局
         self._create_layout()
         # 创建窗口
-        self.window = sg.Window(title=f'Video Subtitle Remover v{backend.main.config.VERSION}' , layout=self.layout,
-                                icon=self.icon)
+        try:
+            self.window = sg.Window(title=f'Video Subtitle Remover v{backend.config.VERSION}' , layout=self.layout,
+                                    icon=self.icon)
+        except Exception as e:
+            print(f"Error creating window: {e}")
+            import traceback
+            traceback.print_exc()
+            return
+        
         while True:
             # 循环读取事件
             event, values = self.window.read(timeout=10)
@@ -292,7 +300,7 @@ class SubtitleRemoverGUI:
                         video_path = self.video_paths.pop()
                         if subtitle_area is not None:
                             print(f"{'SubtitleArea'}：({self.xmin},{self.xmax},{self.ymin},{self.ymax})")
-                        self.sr = backend.main.SubtitleRemover(video_path, subtitle_area, True)
+                        self.sr = backend.main.SubtitleRemover(video_path, subtitle_area, gui_mode=True)
                         self.__disable_button()
                         self.sr.run()
                 Thread(target=task, daemon=True).start()
@@ -396,6 +404,7 @@ if __name__ == '__main__':
         traceback.print_exc()
         msg = traceback.format_exc()
         err_log_path = os.path.join(os.path.expanduser('~'), 'VSR-Error-Message.log')
+        print(f"Writing error log to: {err_log_path}")
         with open(err_log_path, 'w', encoding='utf-8') as f:
             f.writelines(msg)
         import platform
