@@ -14,6 +14,7 @@ import aiohttp
 import asyncio
 import io
 import time
+import psutil
 
 app = FastAPI()
 
@@ -21,12 +22,34 @@ app = FastAPI()
 async def root():
     return {"Message": "Visit docs to remove subtitles in your videos!"}
 
-PROCESSED_DIR = Path("processed_videos")
+# Use absolute paths to avoid working directory issues
+PROCESSED_DIR = Path(os.getcwd()) / "processed_videos"
 PROCESSED_DIR.mkdir(exist_ok=True)
-PROCESSED_FILES_DIR = Path("processed_files")
+PROCESSED_FILES_DIR = Path(os.getcwd()) / "processed_files"
 PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 
 TASK_RESULTS = {}
+
+def check_memory_usage():
+    """Check current memory usage and warn if approaching limits"""
+    try:
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        memory_mb = memory_info.rss / 1024 / 1024
+        
+        # For Coze, assume 512MB limit
+        memory_limit_mb = 512
+        memory_percentage = (memory_mb / memory_limit_mb) * 100
+        
+        print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
+        
+        if memory_percentage > 80:
+            print(f"WARNING: Memory usage at {memory_percentage:.1f}%")
+            return False
+        return True
+    except Exception:
+        # If psutil not available, continue
+        return True
 
 def cleanup_old_tasks():
     """Clean up old tasks and their associated files to prevent memory leaks"""
@@ -59,18 +82,27 @@ def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
         temp_file.write(upload_file.file.read())
         return temp_file.name
 
-async def download_file(url: str, dest_path: str):
-    # Make a request to the url
+async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
+    """Download file with size limit for Coze compatibility"""
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
             if resp.status != 200:
                 raise Exception(f"Failed to download file: {url}")
+            
+            # Check content length if available
+            content_length = resp.headers.get('content-length')
+            if content_length and int(content_length) > max_size_mb * 1024 * 1024:
+                raise Exception(f"File too large: {int(content_length) // (1024*1024)}MB > {max_size_mb}MB")
+            
             with open(dest_path, "wb") as f:
-                # Write the response to the local file
+                downloaded_size = 0
                 while True:
-                    chunk = await resp.content.read(1024 * 1024)
+                    chunk = await resp.content.read(1024 * 1024)  # 1MB chunks
                     if not chunk:
                         break
+                    downloaded_size += len(chunk)
+                    if downloaded_size > max_size_mb * 1024 * 1024:
+                        raise Exception(f"File too large: {downloaded_size // (1024*1024)}MB > {max_size_mb}MB")
                     f.write(chunk)
 
 # Call the SubtitleDetect class functions to find subtitles
@@ -94,6 +126,10 @@ async def find_subtitles(
         temp_video_path = save_temp_file(file)
 
     try:
+        # Check memory before processing
+        if not check_memory_usage():
+            raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
+        
         # Detect subtitle locations and intervals
         subtitle_detect = SubtitleDetect(video_path=temp_video_path)
         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
@@ -174,6 +210,10 @@ async def show_subtitle_box(task_id: str, frame_idx: int = 0):
     distinct_coords = result["distinct_coords"]
     frame_intervals = result["frame_intervals"]
 
+    # Check memory before loading video
+    if not check_memory_usage():
+        raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
+    
     # Open the video and get the requested frame
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
