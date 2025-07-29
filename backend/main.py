@@ -26,6 +26,7 @@ import multiprocessing
 from shapely.geometry import Polygon
 import time
 from tqdm import tqdm
+from backend.models import ModelManager
 
 
 class SubtitleDetect:
@@ -36,21 +37,7 @@ class SubtitleDetect:
     def __init__(self, video_path, sub_area=None):
         self.video_path = video_path
         self.sub_area = sub_area
-
-    @cached_property
-    def text_detector(self):
-        import paddle
-        paddle.disable_signal_handler()
-        from paddleocr.tools.infer import utility
-        from paddleocr.tools.infer.predict_det import TextDetector
-        # 获取参数对象
-        importlib.reload(config)
-        args = utility.parse_args()
-        args.det_algorithm = 'DB'
-        args.det_model_dir = self.convertToOnnxModelIfNeeded(config.DET_MODEL_PATH)
-        args.use_onnx=len(config.ONNX_PROVIDERS) > 0
-        args.onnx_providers=config.ONNX_PROVIDERS
-        return TextDetector(args)
+        self.text_detector = ModelManager.get_text_detector()
 
     def detect_subtitle(self, img):
         dt_boxes, elapse = self.text_detector(img)
