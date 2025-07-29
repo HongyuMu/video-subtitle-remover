@@ -17,8 +17,12 @@ import io
 import time
 import psutil
 from pydantic import BaseModel, Field
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse
+from fastapi import Request
 
 app = FastAPI()
+templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
 async def root():
@@ -281,57 +285,68 @@ async def show_subtitle_box(
     return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/png")
 
 
-class AdjustSubtitleBoxRequest(BaseModel):
-    interval_idx: int
-    x: Optional[int] = Field(None, description="New top-left x-coordinate of the box")
-    y: Optional[int] = Field(None, description="New top-left y-coordinate of the box")
-    width: Optional[int] = Field(None, description="New width of the box")
-    height: Optional[int] = Field(None, description="New height of the box")
+# class AdjustSubtitleBoxRequest(BaseModel):
+#     interval_idx: int
+#     x: Optional[int] = Field(None, description="New top-left x-coordinate of the box")
+#     y: Optional[int] = Field(None, description="New top-left y-coordinate of the box")
+#     width: Optional[int] = Field(None, description="New width of the box")
+#     height: Optional[int] = Field(None, description="New height of the box")
 
-@app.post("/adjust_box/{task_id}")
-async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
+# @app.post("/adjust_box/{task_id}")
+# async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
+#     """
+#     Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
+#     """
+#     result = TASK_RESULTS.get(task_id)
+#     if not result:
+#         raise HTTPException(status_code=404, detail="Task not found")
+
+#     video_width = result.get("video_width")
+#     video_height = result.get("video_height")
+#     if not video_width or not video_height:
+#         raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
+
+#     distinct_coords = result.get("distinct_coords", [])
+#     if not (0 <= req.interval_idx < len(distinct_coords)):
+#         raise HTTPException(status_code=400, detail="Invalid interval_idx")
+
+#     # Get current box properties
+#     xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
+#     current_x, current_y = xmin, ymin
+#     current_width, current_height = xmax - xmin, ymax - ymin
+
+#     # Use new values if provided, otherwise keep current values
+#     new_x = req.x if req.x is not None else current_x
+#     new_y = req.y if req.y is not None else current_y
+#     new_width = req.width if req.width is not None else current_width
+#     new_height = req.height if req.height is not None else current_height
+
+#     # Validate that the new box is within video boundaries
+#     if not (0 <= new_x < video_width and 0 <= new_y < video_height):
+#         raise HTTPException(status_code=400, detail="Box coordinates must be within the video frame.")
+#     if not (new_x + new_width <= video_width and new_y + new_height <= video_height):
+#         raise HTTPException(status_code=400, detail="Box dimensions exceed video boundaries.")
+
+#     # Update coordinates
+#     new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
+#     distinct_coords[req.interval_idx] = new_coords
+#     TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
+
+#     return {
+#         "message": f"Interval {req.interval_idx} adjusted successfully.",
+#         "new_coords": new_coords
+#     }
+
+@app.get("/editor/{task_id}", response_class=HTMLResponse)
+async def get_editor(task_id: str, request: Request):
     """
-    Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
+    Serve the HTML editor page for a given task.
     """
     result = TASK_RESULTS.get(task_id)
     if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    video_width = result.get("video_width")
-    video_height = result.get("video_height")
-    if not video_width or not video_height:
-        raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
-
-    distinct_coords = result.get("distinct_coords", [])
-    if not (0 <= req.interval_idx < len(distinct_coords)):
-        raise HTTPException(status_code=400, detail="Invalid interval_idx")
-
-    # Get current box properties
-    xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
-    current_x, current_y = xmin, ymin
-    current_width, current_height = xmax - xmin, ymax - ymin
-
-    # Use new values if provided, otherwise keep current values
-    new_x = req.x if req.x is not None else current_x
-    new_y = req.y if req.y is not None else current_y
-    new_width = req.width if req.width is not None else current_width
-    new_height = req.height if req.height is not None else current_height
-
-    # Validate that the new box is within video boundaries
-    if not (0 <= new_x < video_width and 0 <= new_y < video_height):
-        raise HTTPException(status_code=400, detail="Box coordinates must be within the video frame.")
-    if not (new_x + new_width <= video_width and new_y + new_height <= video_height):
-        raise HTTPException(status_code=400, detail="Box dimensions exceed video boundaries.")
-
-    # Update coordinates
-    new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
-    distinct_coords[req.interval_idx] = new_coords
-    TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
-
-    return {
-        "message": f"Interval {req.interval_idx} adjusted successfully.",
-        "new_coords": new_coords
-    }
+        return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
+    
+    return templates.TemplateResponse("editor.html", {"request": request, "task_id": task_id})
 
 
 @app.post("/remove_subtitles/")
