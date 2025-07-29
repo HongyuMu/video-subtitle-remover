@@ -57,31 +57,57 @@ def check_memory_usage():
         # If psutil not available, continue
         return True
 
-def cleanup_old_tasks():
-    """Clean up old tasks and their associated files to prevent memory leaks"""
-    import time
-    current_time = time.time()
-    # Keep tasks for 30 minutes (3600 seconds) - shorter for memory efficiency
-    max_age = 3600
-    
+def cleanup_tasks(user_id: Optional[str] = None, all_old: bool = False):
+    """
+    Cleans up tasks from the TASK_RESULTS dictionary.
+    - If user_id is provided, removes all tasks for that user.
+    - If all_old is True, removes all tasks older than the max_age.
+    """
     tasks_to_remove = []
-    for task_id, result in TASK_RESULTS.items():
-        # Check if task has a timestamp (add one if not present)
-        if 'timestamp' not in result:
-            result['timestamp'] = current_time
-        elif current_time - result['timestamp'] > max_age:
-            tasks_to_remove.append(task_id)
-    
+    if user_id:
+        tasks_to_remove = [
+            task_id for task_id, result in TASK_RESULTS.items()
+            if result.get("user_id") == user_id
+        ]
+    elif all_old:
+        current_time = time.time()
+        max_age = 1800  # 30 minutes
+        tasks_to_remove = [
+            task_id for task_id, result in TASK_RESULTS.items()
+            if current_time - result.get('timestamp', current_time) > max_age
+        ]
+
+    cleaned_count = 0
     for task_id in tasks_to_remove:
-        result = TASK_RESULTS.pop(task_id)
-        # Clean up the video file
-        video_path = result.get('video_path')
-        if video_path and os.path.exists(video_path):
-            try:
-                os.remove(video_path)
-                print(f"Cleaned up old task: {task_id}")
-            except Exception:
-                pass  # Ignore cleanup errors
+        result = TASK_RESULTS.pop(task_id, None)
+        if result:
+            video_path = result.get('video_path')
+            if video_path and os.path.exists(video_path):
+                try:
+                    os.remove(video_path)
+                except OSError as e:
+                    print(f"Error removing file {video_path}: {e}")
+            cleaned_count += 1
+    
+    if cleaned_count > 0:
+        print(f"Cleaned up {cleaned_count} tasks.")
+    
+    return cleaned_count
+
+class CleanupRequest(BaseModel):
+    user_id: str
+
+@app.post("/cleanup")
+async def manual_cleanup(request: CleanupRequest):
+    """
+    Manually triggers cleanup for a specific user's tasks.
+    """
+    cleaned_count = cleanup_tasks(user_id=request.user_id)
+    if cleaned_count > 0:
+        return {"message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}."}
+    else:
+        return {"message": f"No tasks found to clean up for user {request.user_id}."}
+
 
 def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
@@ -116,10 +142,14 @@ async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
 async def find_subtitles(
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = None,
-    cloud_ref: Optional[str] = None):
+    cloud_ref: Optional[str] = None,
+    user_id: Optional[str] = None):
     # Use the original filename (without extension) for the output JSON
     original_name = Path(file.filename).stem if file else "unknown"
     temp_video_path = None
+
+    if user_id is None:
+        user_id = str(uuid.uuid4())
 
     if url:
         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
@@ -178,9 +208,10 @@ async def find_subtitles(
             "video_path": temp_video_path,
             "video_width": video_width,
             "video_height": video_height,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "user_id": user_id,
         }
-        return {"task_id": task_id}
+        return {"task_id": task_id, "user_id": user_id}
 
     except Exception as e:
         print("Error in find_subtitles: ", e)
@@ -228,19 +259,13 @@ def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_i
 async def show_subtitle_box(
     task_id: str, 
     frame_idx: int = 0,
-    edit_mode: bool = False,
-    interval_idx: int = None,
-    xmin: int = None,
-    xmax: int = None,
-    ymin: int = None,
-    ymax: int = None
-):
+    draw_box: bool = True):
     """
-    Returns a single video frame with subtitle boxes drawn, for the given frame index.
-    Supports interactive editing of bounding boxes by interval indices.
+    Returns a single video frame. 
+    If draw_box is true, it includes the subtitle boxes.
     """
     # Clean up old tasks first
-    cleanup_old_tasks()
+    cleanup_tasks(all_old=True)
     
     # Retrieve the result from TASK_RESULTS
     result = TASK_RESULTS.get(task_id)
@@ -256,15 +281,6 @@ async def show_subtitle_box(
     if not check_memory_usage():
         raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
     
-    # Handle coordinate updates if in edit mode
-    if edit_mode and interval_idx is not None and all(v is not None for v in [xmin, xmax, ymin, ymax]):
-        if 0 <= interval_idx < len(distinct_coords):
-            # Update the coordinates for the specific interval
-            distinct_coords[interval_idx] = (xmin, xmax, ymin, ymax)
-            # Update the stored result
-            TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
-            print(f"Updated coordinates for interval {interval_idx}: ({xmin}, {xmax}, {ymin}, {ymax})")
-    
     # Open the video and get the requested frame
     cap = cv2.VideoCapture(video_path)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -277,65 +293,69 @@ async def show_subtitle_box(
     if not ret:
         raise HTTPException(status_code=404, detail="Frame not found")
 
-    # Draw the boxes
-    frame_with_boxes = draw_subtitle_boxes(frame, distinct_coords, frame_intervals, frame_idx)
+    # Draw the boxes only if requested by the client
+    if draw_box:
+        frame_with_boxes = draw_subtitle_boxes(frame, distinct_coords, frame_intervals, frame_idx)
+    else:
+        frame_with_boxes = frame
 
     # Encode as PNG for web display
     _, buffer = cv2.imencode('.png', frame_with_boxes)
     return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/png")
 
 
-# class AdjustSubtitleBoxRequest(BaseModel):
-#     interval_idx: int
-#     x: Optional[int] = Field(None, description="New top-left x-coordinate of the box")
-#     y: Optional[int] = Field(None, description="New top-left y-coordinate of the box")
-#     width: Optional[int] = Field(None, description="New width of the box")
-#     height: Optional[int] = Field(None, description="New height of the box")
+class AdjustSubtitleBoxRequest(BaseModel):
+    interval_idx: int
+    x: Optional[int] = Field(None, description="New top-left x-coordinate of the box")
+    y: Optional[int] = Field(None, description="New top-left y-coordinate of the box")
+    width: Optional[int] = Field(None, description="New width of the box")
+    height: Optional[int] = Field(None, description="New height of the box")
 
-# @app.post("/adjust_box/{task_id}")
-# async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
-#     """
-#     Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
-#     """
-#     result = TASK_RESULTS.get(task_id)
-#     if not result:
-#         raise HTTPException(status_code=404, detail="Task not found")
+@app.post("/adjust_box/{task_id}")
+async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
+    """
+    Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
 
-#     video_width = result.get("video_width")
-#     video_height = result.get("video_height")
-#     if not video_width or not video_height:
-#         raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
+    video_width = result.get("video_width")
+    video_height = result.get("video_height")
+    if not video_width or not video_height:
+        raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
 
-#     distinct_coords = result.get("distinct_coords", [])
-#     if not (0 <= req.interval_idx < len(distinct_coords)):
-#         raise HTTPException(status_code=400, detail="Invalid interval_idx")
+    distinct_coords = result.get("distinct_coords", [])
+    if not (0 <= req.interval_idx < len(distinct_coords)):
+        raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
-#     # Get current box properties
-#     xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
-#     current_x, current_y = xmin, ymin
-#     current_width, current_height = xmax - xmin, ymax - ymin
+    # Get current box properties
+    xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
+    current_x, current_y = xmin, ymin
+    current_width, current_height = xmax - xmin, ymax - ymin
 
-#     # Use new values if provided, otherwise keep current values
-#     new_x = req.x if req.x is not None else current_x
-#     new_y = req.y if req.y is not None else current_y
-#     new_width = req.width if req.width is not None else current_width
-#     new_height = req.height if req.height is not None else current_height
+    # Use new values if provided, otherwise keep current values
+    new_x = req.x if req.x is not None else current_x
+    new_y = req.y if req.y is not None else current_y
+    new_width = req.width if req.width is not None else current_width
+    new_height = req.height if req.height is not None else current_height
 
-#     # Validate that the new box is within video boundaries
-#     if not (0 <= new_x < video_width and 0 <= new_y < video_height):
-#         raise HTTPException(status_code=400, detail="Box coordinates must be within the video frame.")
-#     if not (new_x + new_width <= video_width and new_y + new_height <= video_height):
-#         raise HTTPException(status_code=400, detail="Box dimensions exceed video boundaries.")
+    # Validate that the new box is within video boundaries
+    if not (0 <= new_x < video_width and 0 <= new_y < video_height):
+        raise HTTPException(status_code=400, detail="Box coordinates must be within the video frame.")
+    if not (new_x + new_width <= video_width and new_y + new_height <= video_height):
+        raise HTTPException(status_code=400, detail="Box dimensions exceed video boundaries.")
 
-#     # Update coordinates
-#     new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
-#     distinct_coords[req.interval_idx] = new_coords
-#     TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
+    # Update coordinates
+    new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
+    distinct_coords[req.interval_idx] = new_coords
+    TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
 
-#     return {
-#         "message": f"Interval {req.interval_idx} adjusted successfully.",
-#         "new_coords": new_coords
-#     }
+    return {
+        "message": f"Interval {req.interval_idx} adjusted successfully.",
+        "new_coords": new_coords
+    }
+
 
 @app.get("/editor/{task_id}", response_class=HTMLResponse)
 async def get_editor(task_id: str, request: Request):
@@ -347,6 +367,62 @@ async def get_editor(task_id: str, request: Request):
         return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
     
     return templates.TemplateResponse("editor.html", {"request": request, "task_id": task_id})
+
+
+# Sends the task info to the editor page (video dimensions, filename, user_id)
+@app.get("/task_info/{task_id}")
+async def get_task_info(task_id: str):
+    """
+    Returns metadata for a given task, including video dimensions.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    return {
+        "video_width": result.get("video_width"),
+        "video_height": result.get("video_height"),
+        "original_filename": result.get("original_filename"),
+        "user_id": result.get("user_id")
+    }
+
+# 
+@app.post("/process_task/{task_id}")
+async def process_task(task_id: str, background_tasks: BackgroundTasks):
+    """
+    Starts the subtitle removal process for a task that has been edited.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    video_path = result.get("video_path")
+    original_stem = result.get("original_filename", "unknown")
+    
+    # Create a temporary JSON file with the latest coordinates
+    temp_json_path = f"/tmp/{uuid.uuid4()}.json"
+    with open(temp_json_path, "w") as f:
+        json.dump({
+            "distinct_coordinates": result.get("distinct_coords"),
+            "frame_intervals": result.get("frame_intervals")
+        }, f, indent=4)
+
+    processed_video_path = PROCESSED_DIR / f"processed_{original_stem}.mp4"
+    status_file = PROCESSED_DIR / f"{original_stem}.status"
+
+    background_tasks.add_task(
+        process_video,
+        video_path,
+        temp_json_path,
+        processed_video_path,
+        status_file
+    )
+    
+    return {
+        "message": "Video processing started.",
+        "status_url": f"/status/{status_file.name}",
+        "download_url": f"/download_video/{processed_video_path.name}"
+    }
 
 
 @app.post("/remove_subtitles/")
