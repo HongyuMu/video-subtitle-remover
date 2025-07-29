@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subtitle Box Editor</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
+        .editor { display: flex; gap: 20px; }
+        .controls { display: flex; flex-direction: column; gap: 10px; }
+        .slider-group { display: flex; align-items: center; gap: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Subtitle Box Editor</h1>
+    <div class="editor">
+        <img id="preview" src="" alt="Video Frame Preview" width="640">
+        <div class="controls">
+            <h3 id="interval-info"></h3>
+            <div class="slider-group">
+                <label for="x-slider">X:</label>
+                <input type="range" id="x-slider" name="x">
+                <span id="x-value"></span>
+            </div>
+            <div class="slider-group">
+                <label for="y-slider">Y:</label>
+                <input type="range" id="y-slider" name="y">
+                <span id="y-value"></span>
+            </div>
+            <div class="slider-group">
+                <label for="width-slider">Width:</label>
+                <input type="range" id="width-slider" name="width">
+                <span id="width-value"></span>
+            </div>
+            <div class="slider-group">
+                <label for="height-slider">Height:</label>
+                <input type="range" id="height-slider" name="height">
+                <span id="height-value"></span>
+            </div>
+            <div>
+                <button id="prev-btn">Previous</button>
+                <button id="next-btn">Next</button>
+            </div>
+            <button id="finish-btn">Finish and Process</button>
+        </div>
+    </div>
+
+    <script>
+        const taskId = window.location.pathname.split('/').pop();
+        let intervals = [];
+        let currentIntervalIdx = 0;
+
+        const previewImg = document.getElementById('preview');
+        const intervalInfo = document.getElementById('interval-info');
+        const xSlider = document.getElementById('x-slider');
+        const ySlider = document.getElementById('y-slider');
+        const widthSlider = document.getElementById('width-slider');
+        const heightSlider = document.getElementById('height-slider');
+        const xValue = document.getElementById('x-value');
+        const yValue = document.getElementById('y-value');
+        const widthValue = document.getElementById('width-value');
+        const heightValue = document.getElementById('height-value');
+        const prevBtn = document.getElementById('prev-btn');
+        const nextBtn = document.getElementById('next-btn');
+        const finishBtn = document.getElementById('finish-btn');
+
+        async function fetchIntervals() {
+            const response = await fetch(`/subtitle_intervals/${taskId}`);
+            const data = await response.json();
+            intervals = data.intervals;
+            await loadInterval(currentIntervalIdx);
+        }
+
+        async function loadInterval(idx) {
+            currentIntervalIdx = idx;
+            const interval = intervals[idx];
+            intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
+            
+            const [xmin, xmax, ymin, ymax] = interval.coords;
+            const width = xmax - xmin;
+            const height = ymax - ymin;
+
+            // Set slider ranges and values
+            // In a real app, you'd get max values from the video dimensions
+            xSlider.max = 1280; // Placeholder
+            ySlider.max = 720;  // Placeholder
+            widthSlider.max = 1280;
+            heightSlider.max = 720;
+
+            xSlider.value = xmin;
+            ySlider.value = ymin;
+            widthSlider.value = width;
+            heightSlider.value = height;
+
+            xValue.textContent = xmin;
+            yValue.textContent = ymin;
+            widthValue.textContent = width;
+            heightValue.textContent = height;
+
+            updatePreview(interval.frame_range[0]);
+        }
+
+        async function updatePreview(frameIdx) {
+            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}`);
+            const imageBlob = await response.blob();
+            previewImg.src = URL.createObjectURL(imageBlob);
+        }
+
+        async function adjustBox() {
+            const payload = {
+                interval_idx: currentIntervalIdx,
+                x: parseInt(xSlider.value),
+                y: parseInt(ySlider.value),
+                width: parseInt(widthSlider.value),
+                height: parseInt(heightSlider.value)
+            };
+            await fetch(`/adjust_box/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            // Refresh preview after adjustment
+            const frameIdx = intervals[currentIntervalIdx].frame_range[0];
+            updatePreview(frameIdx);
+        }
+
+        xSlider.oninput = () => { xValue.textContent = xSlider.value; adjustBox(); };
+        ySlider.oninput = () => { yValue.textContent = ySlider.value; adjustBox(); };
+        widthSlider.oninput = () => { widthValue.textContent = widthSlider.value; adjustBox(); };
+        heightSlider.oninput = () => { heightValue.textContent = heightSlider.value; adjustBox(); };
+
+        prevBtn.onclick = () => {
+            if (currentIntervalIdx > 0) {
+                loadInterval(currentIntervalIdx - 1);
+            }
+        };
+
+        nextBtn.onclick = () => {
+            if (currentIntervalIdx < intervals.length - 1) {
+                loadInterval(currentIntervalIdx + 1);
+            }
+        };
+
+        finishBtn.onclick = async () => {
+            alert("Processing started! This might take a while. The download will start when it's done.");
+            // In a real app, you would start the processing and then poll for completion
+            // For now, we'll just redirect to the download URL
+            const result = TASK_RESULTS.get(taskId);
+            if (!result) return;
+            const videoPath = result.get("video_path");
+            const response = await fetch(`/remove_subtitles`, {
+                method: 'POST',
+                body: videoPath,
+            });
+            if (response.ok) {
+                const data = await response.json();
+                window.location.href = data.download_url;
+            } else {
+                alert("Failed to start processing.");
+            }
+        };
+
+        fetchIntervals();
+    </script>
+</body>
+</html> 
