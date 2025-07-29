@@ -599,7 +599,7 @@ class SubtitleRemover:
         # 创建视频临时对象，windows下delete=True会有permission denied的报错
         self.video_temp_file = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
         # 创建视频写对象
-        self.video_writer = cv2.VideoWriter(self.video_temp_file.name, cv2.VideoWriter_fourcc(*'avc1'), self.fps, self.size)
+        self.video_writer = cv2.VideoWriter(self.video_temp_file.name, cv2.VideoWriter_fourcc(*'mp4v'), self.fps, self.size)
         self.video_out_name = os.path.join(os.path.dirname(self.video_path), f'{self.vd_name}_no_sub.mp4')
         self.video_inpaint = None
         self.lama_inpaint = None
@@ -1036,7 +1036,7 @@ class SubtitleRemover:
                 audio_merge_command = [config.FFMPEG_PATH,
                                        "-y", "-i", self.video_temp_file.name,
                                        "-i", temp.name,
-                                       "-vcodec", "copy",
+                                       "-vcodec", "libx264" if config.USE_H264 else "copy",
                                        "-acodec", "copy",
                                        "-loglevel", "error", self.video_out_name]
                 try:

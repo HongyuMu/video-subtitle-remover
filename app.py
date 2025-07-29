@@ -7,7 +7,7 @@ import shutil
 import tempfile
 from backend.main import SubtitleRemover, SubtitleDetect
 import backend.config as config
-from typing import Optional
+from typing import Optional, List
 import uvicorn
 import cv2
 import uuid
@@ -16,7 +16,7 @@ import asyncio
 import io
 import time
 import psutil
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 app = FastAPI()
 
@@ -142,6 +142,8 @@ async def find_subtitles(
         complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
         cap = cv2.VideoCapture(temp_video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
 
         # Filter out mistake subtitle areas by checking the fps
@@ -170,6 +172,8 @@ async def find_subtitles(
             "frame_intervals": sub_frame_no_list_continuous,
             "original_filename": original_name,
             "video_path": temp_video_path,
+            "video_width": video_width,
+            "video_height": video_height,
             "timestamp": time.time()
         }
         return {"task_id": task_id}
@@ -277,27 +281,57 @@ async def show_subtitle_box(
     return StreamingResponse(io.BytesIO(buffer.tobytes()), media_type="image/png")
 
 
-class EditSubtitleBoxRequest(BaseModel):
+class AdjustSubtitleBoxRequest(BaseModel):
     interval_idx: int
-    coords: list  # [xmin, xmax, ymin, ymax]
+    x: Optional[int] = Field(None, description="New top-left x-coordinate of the box")
+    y: Optional[int] = Field(None, description="New top-left y-coordinate of the box")
+    width: Optional[int] = Field(None, description="New width of the box")
+    height: Optional[int] = Field(None, description="New height of the box")
 
-@app.post("/edit_subtitle_box/{task_id}")
-async def edit_subtitle_box(task_id: str, req: EditSubtitleBoxRequest):
+@app.post("/adjust_box/{task_id}")
+async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     """
-    Update the rectangle for a specific interval in distinct_coords.
+    Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
     """
     result = TASK_RESULTS.get(task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    video_width = result.get("video_width")
+    video_height = result.get("video_height")
+    if not video_width or not video_height:
+        raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
+
     distinct_coords = result.get("distinct_coords", [])
     if not (0 <= req.interval_idx < len(distinct_coords)):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
-    # Update the rectangle
-    distinct_coords[req.interval_idx] = req.coords
-    # Optionally, mark as edited
-    # result.setdefault("edited_intervals", set()).add(req.interval_idx)
+
+    # Get current box properties
+    xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
+    current_x, current_y = xmin, ymin
+    current_width, current_height = xmax - xmin, ymax - ymin
+
+    # Use new values if provided, otherwise keep current values
+    new_x = req.x if req.x is not None else current_x
+    new_y = req.y if req.y is not None else current_y
+    new_width = req.width if req.width is not None else current_width
+    new_height = req.height if req.height is not None else current_height
+
+    # Validate that the new box is within video boundaries
+    if not (0 <= new_x < video_width and 0 <= new_y < video_height):
+        raise HTTPException(status_code=400, detail="Box coordinates must be within the video frame.")
+    if not (new_x + new_width <= video_width and new_y + new_height <= video_height):
+        raise HTTPException(status_code=400, detail="Box dimensions exceed video boundaries.")
+
+    # Update coordinates
+    new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
+    distinct_coords[req.interval_idx] = new_coords
     TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
-    return {"message": f"Interval {req.interval_idx} updated.", "coords": req.coords}
+
+    return {
+        "message": f"Interval {req.interval_idx} adjusted successfully.",
+        "new_coords": new_coords
+    }
 
 
 @app.post("/remove_subtitles/")
