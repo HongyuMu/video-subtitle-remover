@@ -5,70 +5,182 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Subtitle Box Editor</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; }
-        .editor { display: flex; gap: 20px; }
-        .controls { display: flex; flex-direction: column; gap: 10px; }
-        .slider-group { display: flex; align-items: center; gap: 10px; }
+        :root {
+            --primary-color: #4a90e2;
+            --background-color: #f4f7f6;
+            --editor-bg-color: #ffffff;
+            --text-color: #333;
+            --border-color: #ddd;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            width: 100%;
+            max-width: 1200px;
+        }
+        .editor-header {
+            text-align: center;
+        }
+        .editor-main {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .preview-container {
+            position: relative;
+            max-width: 800px;
+            flex-grow: 1;
+        }
+        #preview-canvas {
+            width: 100%;
+            height: auto;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .controls {
+            background-color: var(--editor-bg-color);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .slider-group {
+            display: grid;
+            grid-template-columns: 50px 1fr 40px;
+            align-items: center;
+            gap: 10px;
+        }
+        input[type="range"] {
+            width: 100%;
+        }
+        .navigation {
+            display: flex;
+            justify-content: space-between;
+        }
+        button {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 5px;
+            background-color: var(--primary-color);
+            color: white;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        button:hover:not(:disabled) {
+            background-color: #357abd;
+        }
+        #finish-btn {
+            background-color: #28a745;
+        }
+        #finish-btn:hover:not(:disabled) {
+            background-color: #218838;
+        }
     </style>
 </head>
 <body>
-    <h1>Subtitle Box Editor</h1>
-    <div class="editor">
-        <img id="preview" src="" alt="Video Frame Preview" width="640">
-        <div class="controls">
-            <h3 id="interval-info"></h3>
-            <div class="slider-group">
-                <label for="x-slider">X:</label>
-                <input type="range" id="x-slider" name="x">
-                <span id="x-value"></span>
+    <div class="container">
+        <div class="editor-header">
+            <h1>Subtitle Box Editor</h1>
+            <h3 id="interval-info">Loading...</h3>
+        </div>
+        <div class="editor-main">
+            <div class="preview-container">
+                <canvas id="preview-canvas"></canvas>
             </div>
-            <div class="slider-group">
-                <label for="y-slider">Y:</label>
-                <input type="range" id="y-slider" name="y">
-                <span id="y-value"></span>
+            <div class="controls">
+                <div class="slider-group">
+                    <label for="x-slider">X:</label>
+                    <input type="range" id="x-slider" name="x">
+                    <span id="x-value"></span>
+                </div>
+                <div class="slider-group">
+                    <label for="y-slider">Y:</label>
+                    <input type="range" id="y-slider" name="y">
+                    <span id="y-value"></span>
+                </div>
+                <div class="slider-group">
+                    <label for="width-slider">Width:</label>
+                    <input type="range" id="width-slider" name="width">
+                    <span id="width-value"></span>
+                </div>
+                <div class="slider-group">
+                    <label for="height-slider">Height:</label>
+                    <input type="range" id="height-slider" name="height">
+                    <span id="height-value"></span>
+                </div>
+                <div class="navigation">
+                    <button id="prev-btn">Previous</button>
+                    <button id="next-btn">Next</button>
+                </div>
+                <button id="finish-btn">Finish and Process</button>
             </div>
-            <div class="slider-group">
-                <label for="width-slider">Width:</label>
-                <input type="range" id="width-slider" name="width">
-                <span id="width-value"></span>
-            </div>
-            <div class="slider-group">
-                <label for="height-slider">Height:</label>
-                <input type="range" id="height-slider" name="height">
-                <span id="height-value"></span>
-            </div>
-            <div>
-                <button id="prev-btn">Previous</button>
-                <button id="next-btn">Next</button>
-            </div>
-            <button id="finish-btn">Finish and Process</button>
         </div>
     </div>
 
     <script>
         const taskId = window.location.pathname.split('/').pop();
         let intervals = [];
+        let taskInfo = {};
         let currentIntervalIdx = 0;
+        let debounceTimer;
+        let currentImage = new Image();
 
-        const previewImg = document.getElementById('preview');
+        const canvas = document.getElementById('preview-canvas');
+        const ctx = canvas.getContext('2d');
         const intervalInfo = document.getElementById('interval-info');
-        const xSlider = document.getElementById('x-slider');
-        const ySlider = document.getElementById('y-slider');
-        const widthSlider = document.getElementById('width-slider');
-        const heightSlider = document.getElementById('height-slider');
-        const xValue = document.getElementById('x-value');
-        const yValue = document.getElementById('y-value');
-        const widthValue = document.getElementById('width-value');
-        const heightValue = document.getElementById('height-value');
+        const sliders = {
+            x: document.getElementById('x-slider'),
+            y: document.getElementById('y-slider'),
+            width: document.getElementById('width-slider'),
+            height: document.getElementById('height-slider')
+        };
+        const values = {
+            x: document.getElementById('x-value'),
+            y: document.getElementById('y-value'),
+            width: document.getElementById('width-value'),
+            height: document.getElementById('height-value')
+        };
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
         const finishBtn = document.getElementById('finish-btn');
 
-        async function fetchIntervals() {
-            const response = await fetch(`/subtitle_intervals/${taskId}`);
-            const data = await response.json();
-            intervals = data.intervals;
-            await loadInterval(currentIntervalIdx);
+        async function initializeEditor() {
+            try {
+                const [intervalsResponse, infoResponse] = await Promise.all([
+                    fetch(`/subtitle_intervals/${taskId}`),
+                    fetch(`/task_info/${taskId}`)
+                ]);
+                const intervalsData = await intervalsResponse.json();
+                const infoData = await infoResponse.json();
+                
+                intervals = intervalsData.intervals;
+                taskInfo = infoData;
+                
+                await loadInterval(currentIntervalIdx);
+            } catch (error) {
+                console.error("Failed to initialize editor:", error);
+                intervalInfo.textContent = "Error loading task. Please try again.";
+            }
         }
 
         async function loadInterval(idx) {
@@ -77,90 +189,129 @@
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
             
             const [xmin, xmax, ymin, ymax] = interval.coords;
-            const width = xmax - xmin;
-            const height = ymax - ymin;
-
-            // Set slider ranges and values
-            // In a real app, you'd get max values from the video dimensions
-            xSlider.max = 1280; // Placeholder
-            ySlider.max = 720;  // Placeholder
-            widthSlider.max = 1280;
-            heightSlider.max = 720;
-
-            xSlider.value = xmin;
-            ySlider.value = ymin;
-            widthSlider.value = width;
-            heightSlider.value = height;
-
-            xValue.textContent = xmin;
-            yValue.textContent = ymin;
-            widthValue.textContent = width;
-            heightValue.textContent = height;
-
-            updatePreview(interval.frame_range[0]);
-        }
-
-        async function updatePreview(frameIdx) {
-            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}`);
-            const imageBlob = await response.blob();
-            previewImg.src = URL.createObjectURL(imageBlob);
-        }
-
-        async function adjustBox() {
-            const payload = {
-                interval_idx: currentIntervalIdx,
-                x: parseInt(xSlider.value),
-                y: parseInt(ySlider.value),
-                width: parseInt(widthSlider.value),
-                height: parseInt(heightSlider.value)
+            const currentBox = {
+                x: xmin,
+                y: ymin,
+                width: xmax - xmin,
+                height: ymax - ymin
             };
+
+            updateSliderRanges();
+            updateSliderValues(currentBox);
+
+            await loadAndDrawFrame(interval.frame_range[0]);
+
+            prevBtn.disabled = currentIntervalIdx === 0;
+            nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
+        }
+
+        function updateSliderRanges() {
+            sliders.x.max = taskInfo.video_width;
+            sliders.y.max = taskInfo.video_height;
+            sliders.width.max = taskInfo.video_width;
+            sliders.height.max = taskInfo.video_height;
+        }
+        
+        function updateSliderValues(box) {
+            for (const key in sliders) {
+                sliders[key].value = box[key];
+                values[key].textContent = box[key];
+            }
+        }
+
+        async function loadAndDrawFrame(frameIdx) {
+            // Fetch the raw frame WITHOUT the box
+            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
+            const imageBlob = await response.blob();
+            currentImage.onload = () => {
+                canvas.width = currentImage.width;
+                canvas.height = currentImage.height;
+                redrawCanvas();
+            };
+            currentImage.src = URL.createObjectURL(imageBlob);
+        }
+
+        function redrawCanvas() {
+            if (!currentImage.src) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(currentImage, 0, 0);
+            
+            const box = {
+                x: parseInt(sliders.x.value),
+                y: parseInt(sliders.y.value),
+                width: parseInt(sliders.width.value),
+                height: parseInt(sliders.height.value)
+            };
+            drawBoundingBox(box);
+        }
+
+        function drawBoundingBox(box) {
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(box.x, box.y, box.width, box.height);
+        }
+        
+        // adjust the box when the slider is moved
+        function handleSliderInput() {
+            const box = {
+                x: parseInt(sliders.x.value),
+                y: parseInt(sliders.y.value),
+                width: parseInt(sliders.width.value),
+                height: parseInt(sliders.height.value)
+            };
+            values.x.textContent = box.x;
+            values.y.textContent = box.y;
+            values.width.textContent = box.width;
+            values.height.textContent = box.height;
+            
+            redrawCanvas();
+
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                saveBox(box);
+            }, 200); // Debounce API calls, wait 200ms before calling
+        }
+
+        // send the box to the server
+        async function saveBox(box) {
+            intervals[currentIntervalIdx].coords = [box.x, box.x + box.width, box.y, box.y + box.height];
             await fetch(`/adjust_box/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify({ interval_idx: currentIntervalIdx, ...box })
             });
-            // Refresh preview after adjustment
-            const frameIdx = intervals[currentIntervalIdx].frame_range[0];
-            updatePreview(frameIdx);
         }
 
-        xSlider.oninput = () => { xValue.textContent = xSlider.value; adjustBox(); };
-        ySlider.oninput = () => { yValue.textContent = ySlider.value; adjustBox(); };
-        widthSlider.oninput = () => { widthValue.textContent = widthSlider.value; adjustBox(); };
-        heightSlider.oninput = () => { heightValue.textContent = heightSlider.value; adjustBox(); };
+        for (const key in sliders) {
+            sliders[key].oninput = handleSliderInput;
+        }
 
-        prevBtn.onclick = () => {
-            if (currentIntervalIdx > 0) {
-                loadInterval(currentIntervalIdx - 1);
-            }
-        };
-
-        nextBtn.onclick = () => {
-            if (currentIntervalIdx < intervals.length - 1) {
-                loadInterval(currentIntervalIdx + 1);
-            }
-        };
+        prevBtn.onclick = () => loadInterval(currentIntervalIdx - 1);
+        nextBtn.onclick = () => loadInterval(currentIntervalIdx + 1);
 
         finishBtn.onclick = async () => {
-            alert("Processing started! This might take a while. The download will start when it's done.");
-            // In a real app, you would start the processing and then poll for completion
-            // For now, we'll just redirect to the download URL
-            const result = TASK_RESULTS.get(taskId);
-            if (!result) return;
-            const videoPath = result.get("video_path");
-            const response = await fetch(`/remove_subtitles`, {
-                method: 'POST',
-                body: videoPath,
-            });
-            if (response.ok) {
-                const data = await response.json();
-                window.location.href = data.download_url;
-            } else {
-                alert("Failed to start processing.");
+            finishBtn.disabled = true;
+            finishBtn.textContent = "Processing...";
+            try {
+                const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
+                if (response.ok) {
+                    const data = await response.json();
+                    alert("Processing started! Your download will begin when ready.");
+                    // In a real app, you would poll the status_url
+                    window.location.href = data.download_url;
+                } else {
+                    alert("Failed to start processing.");
+                    finishBtn.disabled = false;
+                    finishBtn.textContent = "Finish and Process";
+                }
+            } catch (e) {
+                alert("An error occurred.");
+                finishBtn.disabled = false;
+                finishBtn.textContent = "Finish and Process";
             }
         };
 
-        fetchIntervals();
+        initializeEditor();
     </script>
 </body>
 </html> 
