@@ -469,6 +469,53 @@
             }
         };
 
+        function pollStatus(statusUrl, downloadUrl) {
+            finishBtn.textContent = "Processing...";
+            const intervalId = setInterval(async () => {
+                try {
+                    const response = await fetch(statusUrl);
+                    if (!response.ok) {
+                        // If status file not found yet, just wait for it to be created.
+                        if (response.status === 404) {
+                            console.log("Status file not available yet, waiting...");
+                            return;
+                        }
+                        throw new Error(`Status check failed: ${response.statusText}`);
+                    }
+                    const data = await response.json();
+                    if (data.status === "Completed") {
+                        clearInterval(intervalId);
+                        finishBtn.textContent = "Download Ready!";
+                        alert("Processing complete! Your download is starting.");
+                        window.location.href = downloadUrl;
+                        // Re-enable button after a delay in case of redirect issues
+                        setTimeout(() => {
+                            finishBtn.disabled = false;
+                            finishBtn.textContent = "Finish and Process";
+                        }, 5000);
+                    } else if (data.status && data.status.startsWith("Error:")) {
+                        clearInterval(intervalId);
+                        alert(`Processing failed: ${data.status}`);
+                        finishBtn.disabled = false;
+                        finishBtn.textContent = "Finish and Process";
+                    } else {
+                        // Still processing, show progress in button text
+                        if (finishBtn.textContent.length > 20) {
+                           finishBtn.textContent = "Processing...";
+                        } else {
+                           finishBtn.textContent += ".";
+                        }
+                    }
+                } catch (error) {
+                    console.error("Polling error:", error);
+                    clearInterval(intervalId);
+                    alert("An error occurred while checking the processing status. Please check the console for details.");
+                    finishBtn.disabled = false;
+                    finishBtn.textContent = "Finish and Process";
+                }
+            }, 3000); // Poll every 3 seconds
+        }
+
         // This function is called when the user clicks the "Finish and Process" button.
         finishBtn.onclick = async () => {
             finishBtn.disabled = true;
@@ -478,16 +525,15 @@
                 const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
                 if (response.ok) {
                     const data = await response.json();
-                    alert("Processing started! Your download will begin when ready.");
-                    // Redirect the user's browser to the download URL for the finished video
-                    window.location.href = data.download_url;
+                    alert("Processing started! This may take a few minutes. Your download will begin automatically when it's ready.");
+                    pollStatus(data.status_url, data.download_url);
                 } else {
                     alert("Failed to start processing.");
                     finishBtn.disabled = false;
                     finishBtn.textContent = "Finish and Process";
                 }
             } catch (e) {
-                alert("An error occurred.");
+                alert("An error occurred while starting the process.");
                 finishBtn.disabled = false;
                 finishBtn.textContent = "Finish and Process";
             }
