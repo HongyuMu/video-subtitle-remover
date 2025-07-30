@@ -10,7 +10,6 @@
             --background-color: #f4f7f6;
             --editor-bg-color: #ffffff;
             --text-color: #333;
-            --border-color: #ddd;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -43,12 +42,14 @@
             position: relative;
             max-width: 800px;
             flex-grow: 1;
+            min-width: 300px;
         }
         #preview-canvas {
             width: 100%;
             height: auto;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            background-color: #e9ecef;
         }
         .controls {
             background-color: var(--editor-bg-color);
@@ -66,13 +67,8 @@
             align-items: center;
             gap: 10px;
         }
-        input[type="range"] {
-            width: 100%;
-        }
-        .navigation {
-            display: flex;
-            justify-content: space-between;
-        }
+        input[type="range"] { width: 100%; }
+        .navigation { display: flex; justify-content: space-between; }
         button {
             padding: 10px 15px;
             border: none;
@@ -82,19 +78,10 @@
             cursor: pointer;
             transition: background-color 0.2s;
         }
-        button:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
-        }
-        button:hover:not(:disabled) {
-            background-color: #357abd;
-        }
-        #finish-btn {
-            background-color: #28a745;
-        }
-        #finish-btn:hover:not(:disabled) {
-            background-color: #218838;
-        }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        button:hover:not(:disabled) { background-color: #357abd; }
+        #finish-btn { background-color: #28a745; }
+        #finish-btn:hover:not(:disabled) { background-color: #218838; }
     </style>
 </head>
 <body>
@@ -138,13 +125,18 @@
     </div>
 
     <script>
+        // --- INITIALIZATION ---
+        // Get the unique task ID from the URL (e.g., /editor/some-uuid-goes-here)
         const taskId = window.location.pathname.split('/').pop();
-        let intervals = [];
-        let taskInfo = {};
-        let currentIntervalIdx = 0;
-        let debounceTimer;
-        let currentImage = new Image();
+        
+        // Global variables to hold the state of the editor
+        let intervals = []; // All subtitle intervals from the server
+        let taskInfo = {};  // Video metadata like width and height
+        let currentIntervalIdx = 0; // The index of the interval we are currently editing
+        let debounceTimer; // A timer to prevent spamming the API while moving sliders
+        let currentImage = new Image(); // An image object to hold the current raw video frame
 
+        // Get references to all the HTML elements we will interact with
         const canvas = document.getElementById('preview-canvas');
         const ctx = canvas.getContext('2d');
         const intervalInfo = document.getElementById('interval-info');
@@ -164,18 +156,23 @@
         const nextBtn = document.getElementById('next-btn');
         const finishBtn = document.getElementById('finish-btn');
 
+        // This is the main function that runs when the page loads.
+        // It fetches all necessary data from the server to set up the editor.
         async function initializeEditor() {
             try {
+                // Fetch both the interval data and the video metadata at the same time.
                 const [intervalsResponse, infoResponse] = await Promise.all([
-                    fetch(`/subtitle_intervals/${taskId}`),
-                    fetch(`/task_info/${taskId}`)
+                    fetch(`/subtitle_intervals/${taskId}`), // Gets all subtitle boxes and frame ranges
+                    fetch(`/task_info/${taskId}`)         // Gets video width and height for sliders
                 ]);
                 const intervalsData = await intervalsResponse.json();
                 const infoData = await infoResponse.json();
                 
+                // Store the fetched data in our global variables
                 intervals = intervalsData.intervals;
                 taskInfo = infoData;
                 
+                // Load the first interval into the editor UI
                 await loadInterval(currentIntervalIdx);
             } catch (error) {
                 console.error("Failed to initialize editor:", error);
@@ -183,11 +180,15 @@
             }
         }
 
+        // --- CORE EDITOR LOGIC ---
+
+        // This function updates the entire UI for a specific subtitle interval.
         async function loadInterval(idx) {
             currentIntervalIdx = idx;
             const interval = intervals[idx];
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
             
+            // Convert the server's [xmin, xmax, ymin, ymax] format to the UI's {x, y, width, height} format
             const [xmin, xmax, ymin, ymax] = interval.coords;
             const currentBox = {
                 x: xmin,
@@ -196,15 +197,19 @@
                 height: ymax - ymin
             };
 
+            // Set up the sliders with the correct max values and current positions
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            await loadAndDrawFrame(interval.frame_range[0]);
+            // Fetch the raw video frame for this interval from the server
+            await loadFrameImage(interval.frame_range[0]);
 
+            // Enable/disable the "Previous" and "Next" buttons appropriately
             prevBtn.disabled = currentIntervalIdx === 0;
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
         }
 
+        // Sets the maximum value of the sliders based on the video's dimensions
         function updateSliderRanges() {
             sliders.x.max = taskInfo.video_width;
             sliders.y.max = taskInfo.video_height;
@@ -212,6 +217,7 @@
             sliders.height.max = taskInfo.video_height;
         }
         
+        // Sets the current value (position) of the sliders and updates the text display next to them
         function updateSliderValues(box) {
             for (const key in sliders) {
                 sliders[key].value = box[key];
@@ -219,65 +225,83 @@
             }
         }
 
-        async function loadAndDrawFrame(frameIdx) {
-            // Fetch the raw frame WITHOUT the box
+        // --- RENDERING AND PREVIEW ---
+
+        // Fetches a single, clean video frame from the server (with no box drawn on it).
+        async function loadFrameImage(frameIdx) {
+            // Calls the API to get the raw image data
             const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
             const imageBlob = await response.blob();
+            // When the image data has loaded into our image object, redraw the canvas.
             currentImage.onload = () => {
-                canvas.width = currentImage.width;
-                canvas.height = currentImage.height;
                 redrawCanvas();
             };
             currentImage.src = URL.createObjectURL(imageBlob);
         }
 
+        // This is the core of the real-time preview. It redraws everything on the canvas.
         function redrawCanvas() {
-            if (!currentImage.src) return;
-            // Use the naturalWidth and naturalHeight of the image to set the canvas size
+            // Don't do anything if the image isn't fully loaded yet
+            if (!currentImage.complete || currentImage.naturalWidth === 0) return;
+            
+            // Set the canvas size to match the image's actual size
             canvas.width = currentImage.naturalWidth;
             canvas.height = currentImage.naturalHeight;
+            
+            // Clear the canvas and draw the background video frame
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(currentImage, 0, 0);
             
+            // Get the current positions of the sliders
             const box = {
                 x: parseInt(sliders.x.value),
                 y: parseInt(sliders.y.value),
                 width: parseInt(sliders.width.value),
                 height: parseInt(sliders.height.value)
             };
+            // Draw the green bounding box on top of the video frame
             drawBoundingBox(box);
         }
 
+        // A simple utility function to draw a rectangle on the canvas.
         function drawBoundingBox(box) {
             ctx.strokeStyle = 'lime';
             ctx.lineWidth = 2;
             ctx.strokeRect(box.x, box.y, box.width, box.height);
         }
         
-        // adjust the box when the slider is moved
+        // --- HANDLING USER INPUT AND SAVING ---
+
+        // This function is called every time a slider is moved.
         function handleSliderInput() {
+            // Get the current values from all sliders
             const box = {
                 x: parseInt(sliders.x.value),
                 y: parseInt(sliders.y.value),
                 width: parseInt(sliders.width.value),
                 height: parseInt(sliders.height.value)
             };
-            values.x.textContent = box.x;
-            values.y.textContent = box.y;
-            values.width.textContent = box.width;
-            values.height.textContent = box.height;
+            // Update the text display next to each slider
+            for(const key in values) {
+                values[key].textContent = box[key];
+            }
             
+            // Redraw the canvas to provide instant visual feedback
             redrawCanvas();
 
+            // Use a debounce timer to avoid spamming the server.
+            // This waits for the user to stop moving the slider for 200ms before saving.
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 saveBox(box);
-            }, 200); // Debounce API calls, wait 200ms before calling
+            }, 200);
         }
 
-        // send the box to the server
+        // Sends the updated box coordinates to the server to be stored.
         async function saveBox(box) {
+            // Update the coordinates in our local 'intervals' array first
             intervals[currentIntervalIdx].coords = [box.x, box.x + box.width, box.y, box.y + box.height];
+            // Send the new data to the /adjust_box endpoint
             await fetch(`/adjust_box/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -285,22 +309,28 @@
             });
         }
 
+        // --- EVENT LISTENERS ---
+
+        // Attach the handleSliderInput function to all sliders.
         for (const key in sliders) {
             sliders[key].oninput = handleSliderInput;
         }
 
+        // Attach the navigation functions to the Previous/Next buttons.
         prevBtn.onclick = () => loadInterval(currentIntervalIdx - 1);
         nextBtn.onclick = () => loadInterval(currentIntervalIdx + 1);
 
+        // This function is called when the user clicks the "Finish and Process" button.
         finishBtn.onclick = async () => {
             finishBtn.disabled = true;
             finishBtn.textContent = "Processing...";
             try {
+                // Tell the server to start the final video processing job
                 const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
                 if (response.ok) {
                     const data = await response.json();
                     alert("Processing started! Your download will begin when ready.");
-                    // In a real app, you would poll the status_url
+                    // Redirect the user's browser to the download URL for the finished video
                     window.location.href = data.download_url;
                 } else {
                     alert("Failed to start processing.");
@@ -314,6 +344,9 @@
             }
         };
 
+        // --- START THE APPLICATION ---
+        
+        // Kick off the entire process when the page first loads.
         initializeEditor();
     </script>
 </body>
