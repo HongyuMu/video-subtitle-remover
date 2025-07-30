@@ -12,19 +12,20 @@
 - [x] Generate preview frames/images with bounding boxes for each interval (like in `gui.py`).
 - [x] Display these previews in a web UI or plugin interface.
 - [x] Create `/show_subtitle_box/{task_id}?frame_idx=X` endpoint for frame-by-frame preview.
-- [ ] Allow the user to adjust the bounding box for each interval (e.g., via sliders or drag handles).
-- [ ] When the user modifies a box at a frame, update the corresponding item in `distinct_coords` for that interval only.
-- [ ] Ensure changes are interval-specific: only the relevant interval's coordinates are updated.
+- [x] Allow the user to adjust the bounding box for each interval (e.g., via sliders or drag handles).
+- [x] When the user modifies a box at a frame, update the corresponding item in `distinct_coords` for that interval only.
+- [x] Ensure changes are interval-specific: only the relevant interval's coordinates are updated.
 
 ## 4. Confirmation & Processing
-- [ ] Provide a "Finish Selection" or "Confirm" button for the user to finalize their edits.
-- [ ] On confirmation, call the subtitle removal process (`remove_subtitles`) with the user-edited `distinct_coords` and `frame_intervals`.
-- [ ] Show progress and allow the user to download or view the processed video when done.
+- [x] Provide a "Finish Selection" or "Confirm" button for the user to finalize their edits.
+- [x] On confirmation, call the subtitle removal process (`remove_subtitles`) with the user-edited `distinct_coords` and `frame_intervals`.
+- [x] Show progress and allow the user to download or view the processed video when done.
 
 ## 5. Flexibility & UX
-- [ ] Support editing of multiple intervals independently.
+- [x] Support editing of multiple intervals independently.
 - [ ] Allow the user to reset or undo changes to any interval.
-- [ ] (Optional) Allow adding/removing intervals if detection missed or over-segmented.
+- [x] Added "Use Previous Box" button to handle misclassified multi-line subtitles.
+- [x] Added number inputs for pixel-perfect precision, addressing the "scale" issue.
 
 ## 6. API/Plugin Integration
 - [ ] Expose endpoints or plugin hooks for all steps: detection, preview, editing, confirmation, processing, and download.
