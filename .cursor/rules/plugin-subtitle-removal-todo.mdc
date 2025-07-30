@@ -23,7 +23,7 @@
 
 ## 5. Flexibility & UX
 - [x] Support editing of multiple intervals independently.
-- [ ] Allow the user to reset or undo changes to any interval.
+- [x] Allow the user to reset or undo changes to any interval.
 - [x] Added "Use Previous Box" button to handle misclassified multi-line subtitles.
 - [x] Added number inputs for pixel-perfect precision, addressing the "scale" issue.
 

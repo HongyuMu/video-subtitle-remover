@@ -105,6 +105,8 @@
         #finish-btn:hover:not(:disabled) { background-color: #218838; }
         #merge-btn { background-color: #fd7e14; }
         #merge-btn:hover:not(:disabled) { background-color: #e86a07; }
+        #reset-btn { background-color: #6c757d; }
+        #reset-btn:hover:not(:disabled) { background-color: #5a6268; }
     </style>
 </head>
 <body>
@@ -159,6 +161,9 @@
                     <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
                 </div>
                 <div class="extra-controls">
+                    <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
+                </div>
+                <div class="extra-controls">
                     <button id="merge-btn" style="width: 100%;">Merge Similar Boxes</button>
                 </div>
                 <button id="finish-btn">Finish and Process</button>
@@ -167,12 +172,13 @@
     </div>
 
     <script>
-        // --- INITIALIZATION ---
+        // --- 1. INITIALIZATION ---
         // Get the unique task ID from the URL (e.g., /editor/some-uuid-goes-here)
         const taskId = window.location.pathname.split('/').pop();
         
         // Global variables to hold the state of the editor
         let intervals = []; // All subtitle intervals from the server
+        let originalIntervals = []; // A pristine copy of the intervals for the "reset" feature
         let taskInfo = {};  // Video metadata like width and height
         let currentIntervalIdx = 0; // The index of the interval we are currently editing
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
@@ -200,6 +206,7 @@
         const useLastBtn = document.getElementById('use-last-btn');
         const stepInput = document.getElementById('step-input');
         const mergeBtn = document.getElementById('merge-btn');
+        const resetBtn = document.getElementById('reset-btn');
 
         // This is the main function that runs when the page loads.
         // It fetches all necessary data from the server to set up the editor.
@@ -215,6 +222,7 @@
                 
                 // Store the fetched data in our global variables
                 intervals = intervalsData.intervals;
+                originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals)); // Deep copy for reset
                 taskInfo = infoData;
                 
                 // Load the first interval into the editor UI
@@ -253,6 +261,10 @@
             prevBtn.disabled = currentIntervalIdx === 0;
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
             useLastBtn.disabled = currentIntervalIdx === 0;
+
+            // Only allow merging when on the last interval
+            mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
+            mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
         }
 
         // Sets the maximum value of the sliders based on the video's dimensions
@@ -366,6 +378,27 @@
             for (const key in sliders) {
                 sliders[key].step = stepValue;
             }
+        };
+
+        resetBtn.onclick = () => {
+            if (!originalIntervals.length) return;
+
+            // Get the original, unmodified box for the current interval
+            const originalInterval = originalIntervals[currentIntervalIdx];
+            const [xmin, xmax, ymin, ymax] = originalInterval.coords;
+            const originalBox = {
+                x: xmin,
+                y: ymin,
+                width: xmax - xmin,
+                height: ymax - ymin
+            };
+
+            // Update UI, redraw canvas, and save the reverted state to the server
+            updateSliderValues(originalBox);
+            redrawCanvas(originalBox);
+            saveBox(originalBox);
+
+            alert('The box for this interval has been reset to its original position.');
         };
 
         // Attach the navigation functions to the Previous/Next buttons.
