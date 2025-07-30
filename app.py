@@ -140,6 +140,7 @@ async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
 # Call the SubtitleDetect class functions to find subtitles
 @app.post("/find_subtitles/")
 async def find_subtitles(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = None,
     cloud_ref: Optional[str] = None,
@@ -201,6 +202,7 @@ async def find_subtitles(
 
         # Store results
         task_id = str(uuid.uuid4())
+        editor_url = str(request.url_for('get_editor', task_id=task_id))
         TASK_RESULTS[task_id] = {
             "distinct_coords": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous,
@@ -211,7 +213,7 @@ async def find_subtitles(
             "timestamp": time.time(),
             "user_id": user_id,
         }
-        return {"task_id": task_id, "user_id": user_id}
+        return {"task_id": task_id, "user_id": user_id, "editor_url": editor_url}
 
     except Exception as e:
         print("Error in find_subtitles: ", e)
@@ -366,7 +368,18 @@ async def get_editor(task_id: str, request: Request):
     if not result:
         return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
     
-    return templates.TemplateResponse("editor.html", {"request": request, "task_id": task_id})
+    # Check the Accept header
+    accept_header = request.headers.get("accept", "")
+    if "text/html" in accept_header:
+        # Browser client, serve the HTML page
+        return templates.TemplateResponse("editor.html", {"request": request, "task_id": task_id})
+    else:
+        # API client, return a JSON response with the link
+        editor_url = str(request.url_for('get_editor', task_id=task_id))
+        return JSONResponse(content={
+            "message": "Task is ready for editing.",
+            "editor_url": editor_url
+        })
 
 
 # Sends the task info to the editor page (video dimensions, filename, user_id)
