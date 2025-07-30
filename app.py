@@ -43,8 +43,8 @@ def check_memory_usage():
         memory_info = process.memory_info()
         memory_mb = memory_info.rss / 1024 / 1024
         
-        # Assume 1024MB limit
-        memory_limit_mb = 1024
+        # Assume 2048MB limit
+        memory_limit_mb = 2048
         memory_percentage = (memory_mb / memory_limit_mb) * 100
         
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
