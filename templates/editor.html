@@ -105,8 +105,8 @@
         #finish-btn:hover:not(:disabled) { background-color: #218838; }
         #merge-btn { background-color: #fd7e14; }
         #merge-btn:hover:not(:disabled) { background-color: #e86a07; }
-        #reset-btn { background-color: #6c757d; }
-        #reset-btn:hover:not(:disabled) { background-color: #5a6268; }
+        #reset-btn, #not-sub-btn { background-color: #6c757d; }
+        #reset-btn:hover:not(:disabled), #not-sub-btn:hover:not(:disabled) { background-color: #5a6268; }
     </style>
 </head>
 <body>
@@ -164,6 +164,9 @@
                     <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
                 </div>
                 <div class="extra-controls">
+                    <button id="not-sub-btn" style="width: 100%;">Not a Subtitle</button>
+                </div>
+                <div class="extra-controls">
                     <button id="merge-btn" style="width: 100%;">Merge Similar Boxes</button>
                 </div>
                 <button id="finish-btn">Finish and Process</button>
@@ -207,6 +210,7 @@
         const stepInput = document.getElementById('step-input');
         const mergeBtn = document.getElementById('merge-btn');
         const resetBtn = document.getElementById('reset-btn');
+        const notSubBtn = document.getElementById('not-sub-btn');
 
         // This is the main function that runs when the page loads.
         // It fetches all necessary data from the server to set up the editor.
@@ -237,6 +241,9 @@
 
         // This function updates the entire UI for a specific subtitle interval.
         async function loadInterval(idx) {
+            // FIX: Cancel any pending save from the previous interval to prevent race conditions.
+            clearTimeout(debounceTimer);
+
             currentIntervalIdx = idx;
             const interval = intervals[idx];
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
@@ -421,6 +428,18 @@
                 redrawCanvas(lastBox); // Explicitly redraw with the new box
                 saveBox(lastBox);
             }
+        };
+
+        notSubBtn.onclick = () => {
+            // Create a "null" box to represent no subtitle
+            const nullBox = { x: 0, y: 0, width: 0, height: 0 };
+
+            // Update UI, redraw the canvas (with no box), and save this state to the server.
+            updateSliderValues(nullBox);
+            redrawCanvas(nullBox);
+            saveBox(nullBox);
+
+            alert('This interval has been marked as "Not a Subtitle" and will be skipped.');
         };
 
         mergeBtn.onclick = async () => {
