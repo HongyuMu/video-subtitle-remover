@@ -63,12 +63,19 @@
         }
         .slider-group {
             display: grid;
-            grid-template-columns: 50px 1fr 40px;
+            grid-template-columns: 50px 1fr 60px; /* Adjusted for number input */
             align-items: center;
             gap: 10px;
         }
+        input[type="number"] {
+            width: 100%;
+            padding: 5px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+        }
         input[type="range"] { width: 100%; }
-        .navigation { display: flex; justify-content: space-between; }
+        .navigation { display: flex; justify-content: space-between; gap: 10px; }
+        .extra-controls { margin-top: 10px; }
         button {
             padding: 10px 15px;
             border: none;
@@ -98,26 +105,29 @@
                 <div class="slider-group">
                     <label for="x-slider">X:</label>
                     <input type="range" id="x-slider" name="x">
-                    <span id="x-value"></span>
+                    <input type="number" id="x-value" class="value-input">
                 </div>
                 <div class="slider-group">
                     <label for="y-slider">Y:</label>
                     <input type="range" id="y-slider" name="y">
-                    <span id="y-value"></span>
+                    <input type="number" id="y-value" class="value-input">
                 </div>
                 <div class="slider-group">
                     <label for="width-slider">Width:</label>
                     <input type="range" id="width-slider" name="width">
-                    <span id="width-value"></span>
+                    <input type="number" id="width-value" class="value-input">
                 </div>
                 <div class="slider-group">
                     <label for="height-slider">Height:</label>
                     <input type="range" id="height-slider" name="height">
-                    <span id="height-value"></span>
+                    <input type="number" id="height-value" class="value-input">
                 </div>
                 <div class="navigation">
                     <button id="prev-btn">Previous</button>
                     <button id="next-btn">Next</button>
+                </div>
+                <div class="extra-controls">
+                    <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
                 </div>
                 <button id="finish-btn">Finish and Process</button>
             </div>
@@ -155,6 +165,7 @@
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
         const finishBtn = document.getElementById('finish-btn');
+        const useLastBtn = document.getElementById('use-last-btn');
 
         // This is the main function that runs when the page loads.
         // It fetches all necessary data from the server to set up the editor.
@@ -204,9 +215,10 @@
             // Fetch the raw video frame for this interval from the server
             await loadFrameImage(interval.frame_range[0]);
 
-            // Enable/disable the "Previous" and "Next" buttons appropriately
+            // Enable/disable the navigation and "Use Previous" buttons appropriately
             prevBtn.disabled = currentIntervalIdx === 0;
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
+            useLastBtn.disabled = currentIntervalIdx === 0;
         }
 
         // Sets the maximum value of the sliders based on the video's dimensions
@@ -221,7 +233,7 @@
         function updateSliderValues(box) {
             for (const key in sliders) {
                 sliders[key].value = box[key];
-                values[key].textContent = box[key];
+                values[key].value = box[key]; // Update number input as well
             }
         }
 
@@ -272,7 +284,7 @@
         
         // --- HANDLING USER INPUT AND SAVING ---
 
-        // This function is called every time a slider is moved.
+        // This function is called every time a slider or number input is changed.
         function handleSliderInput() {
             // Get the current values from all sliders
             const box = {
@@ -283,7 +295,7 @@
             };
             // Update the text display next to each slider
             for(const key in values) {
-                values[key].textContent = box[key];
+                values[key].value = box[key];
             }
             
             // Redraw the canvas to provide instant visual feedback
@@ -295,6 +307,11 @@
             debounceTimer = setTimeout(() => {
                 saveBox(box);
             }, 200);
+        }
+
+        function handleNumberInput(key) {
+            sliders[key].value = values[key].value;
+            handleSliderInput();
         }
 
         // Sends the updated box coordinates to the server to be stored.
@@ -314,11 +331,30 @@
         // Attach the handleSliderInput function to all sliders.
         for (const key in sliders) {
             sliders[key].oninput = handleSliderInput;
+            values[key].onchange = () => handleNumberInput(key);
         }
 
         // Attach the navigation functions to the Previous/Next buttons.
         prevBtn.onclick = () => loadInterval(currentIntervalIdx - 1);
         nextBtn.onclick = () => loadInterval(currentIntervalIdx + 1);
+
+        useLastBtn.onclick = () => {
+            if (currentIntervalIdx > 0) {
+                const lastInterval = intervals[currentIntervalIdx - 1];
+                const [xmin, xmax, ymin, ymax] = lastInterval.coords;
+                const lastBox = {
+                    x: xmin,
+                    y: ymin,
+                    width: xmax - xmin,
+                    height: ymax - ymin
+                };
+
+                // Update UI and save the new box
+                updateSliderValues(lastBox);
+                redrawCanvas();
+                saveBox(lastBox);
+            }
+        };
 
         // This function is called when the user clicks the "Finish and Process" button.
         finishBtn.onclick = async () => {
