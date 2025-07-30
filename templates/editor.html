@@ -61,6 +61,14 @@
             flex-direction: column;
             gap: 15px;
         }
+        .instructions {
+            font-size: 0.8em;
+            color: #666;
+            background-color: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
         .slider-group {
             display: grid;
             grid-template-columns: 50px 1fr 60px; /* Adjusted for number input */
@@ -76,6 +84,12 @@
         input[type="range"] { width: 100%; }
         .navigation { display: flex; justify-content: space-between; gap: 10px; }
         .extra-controls { margin-top: 10px; }
+        .step-control { 
+            display: flex; 
+            align-items: center; 
+            gap: 10px; 
+            margin-top: 10px;
+        }
         button {
             padding: 10px 15px;
             border: none;
@@ -89,6 +103,8 @@
         button:hover:not(:disabled) { background-color: #357abd; }
         #finish-btn { background-color: #28a745; }
         #finish-btn:hover:not(:disabled) { background-color: #218838; }
+        #merge-btn { background-color: #fd7e14; }
+        #merge-btn:hover:not(:disabled) { background-color: #e86a07; }
     </style>
 </head>
 <body>
@@ -102,6 +118,15 @@
                 <canvas id="preview-canvas"></canvas>
             </div>
             <div class="controls">
+                <div class="instructions">
+                    <p><b>How to adjust:</b></p>
+                    <ul>
+                        <li><b>Move Up/Down:</b> Decrease/Increase Y</li>
+                        <li><b>Move Left/Right:</b> Decrease/Increase X</li>
+                        <li><b>Shrink/Grow Vertically:</b> Decrease/Increase Height</li>
+                        <li><b>Shrink/Grow Horizontally:</b> Decrease/Increase Width</li>
+                    </ul>
+                </div>
                 <div class="slider-group">
                     <label for="x-slider">X:</label>
                     <input type="range" id="x-slider" name="x">
@@ -122,12 +147,19 @@
                     <input type="range" id="height-slider" name="height">
                     <input type="number" id="height-value" class="value-input">
                 </div>
+                <div class="step-control">
+                    <label for="step-input">Step:</label>
+                    <input type="number" id="step-input" value="1" min="1" style="width: 60px;">
+                </div>
                 <div class="navigation">
                     <button id="prev-btn">Previous</button>
                     <button id="next-btn">Next</button>
                 </div>
                 <div class="extra-controls">
                     <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
+                </div>
+                <div class="extra-controls">
+                    <button id="merge-btn" style="width: 100%;">Merge Similar Boxes</button>
                 </div>
                 <button id="finish-btn">Finish and Process</button>
             </div>
@@ -166,6 +198,8 @@
         const nextBtn = document.getElementById('next-btn');
         const finishBtn = document.getElementById('finish-btn');
         const useLastBtn = document.getElementById('use-last-btn');
+        const stepInput = document.getElementById('step-input');
+        const mergeBtn = document.getElementById('merge-btn');
 
         // This is the main function that runs when the page loads.
         // It fetches all necessary data from the server to set up the editor.
@@ -212,8 +246,8 @@
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            // Fetch the raw video frame for this interval from the server
-            await loadFrameImage(interval.frame_range[0]);
+            // Fetch the raw video frame and then draw the correct box on top
+            await loadFrameImage(interval.frame_range[0], currentBox);
 
             // Enable/disable the navigation and "Use Previous" buttons appropriately
             prevBtn.disabled = currentIntervalIdx === 0;
@@ -240,19 +274,19 @@
         // --- RENDERING AND PREVIEW ---
 
         // Fetches a single, clean video frame from the server (with no box drawn on it).
-        async function loadFrameImage(frameIdx) {
+        async function loadFrameImage(frameIdx, boxToDraw) {
             // Calls the API to get the raw image data
             const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
             const imageBlob = await response.blob();
             // When the image data has loaded into our image object, redraw the canvas.
             currentImage.onload = () => {
-                redrawCanvas();
+                redrawCanvas(boxToDraw);
             };
             currentImage.src = URL.createObjectURL(imageBlob);
         }
 
         // This is the core of the real-time preview. It redraws everything on the canvas.
-        function redrawCanvas() {
+        function redrawCanvas(box) {
             // Don't do anything if the image isn't fully loaded yet
             if (!currentImage.complete || currentImage.naturalWidth === 0) return;
             
@@ -264,13 +298,6 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(currentImage, 0, 0);
             
-            // Get the current positions of the sliders
-            const box = {
-                x: parseInt(sliders.x.value),
-                y: parseInt(sliders.y.value),
-                width: parseInt(sliders.width.value),
-                height: parseInt(sliders.height.value)
-            };
             // Draw the green bounding box on top of the video frame
             drawBoundingBox(box);
         }
@@ -298,8 +325,8 @@
                 values[key].value = box[key];
             }
             
-            // Redraw the canvas to provide instant visual feedback
-            redrawCanvas();
+            // Redraw the canvas to provide instant visual feedback with the correct box
+            redrawCanvas(box);
 
             // Use a debounce timer to avoid spamming the server.
             // This waits for the user to stop moving the slider for 200ms before saving.
@@ -334,6 +361,13 @@
             values[key].onchange = () => handleNumberInput(key);
         }
 
+        stepInput.onchange = () => {
+            const stepValue = parseInt(stepInput.value);
+            for (const key in sliders) {
+                sliders[key].step = stepValue;
+            }
+        };
+
         // Attach the navigation functions to the Previous/Next buttons.
         prevBtn.onclick = () => loadInterval(currentIntervalIdx - 1);
         nextBtn.onclick = () => loadInterval(currentIntervalIdx + 1);
@@ -351,8 +385,35 @@
 
                 // Update UI and save the new box
                 updateSliderValues(lastBox);
-                redrawCanvas();
+                redrawCanvas(lastBox); // Explicitly redraw with the new box
                 saveBox(lastBox);
+            }
+        };
+
+        mergeBtn.onclick = async () => {
+            mergeBtn.disabled = true;
+            mergeBtn.textContent = "Merging...";
+            try {
+                const response = await fetch(`/merge_similar_intervals/${taskId}`, { method: 'POST' });
+                if (response.ok) {
+                    const data = await response.json();
+                    alert(`Merge complete! ${data.original_count} intervals were combined into ${data.merged_count}. The editor will now refresh to the beginning of the new list for review.`);
+                    
+                    // FIX: Reset the index to 0 to avoid "index out of range" errors.
+                    // This provides a clean starting point for reviewing the new merged intervals.
+                    currentIntervalIdx = 0;
+
+                    // Reload the editor with the new, merged intervals
+                    await initializeEditor(); 
+                } else {
+                    alert("Failed to merge intervals.");
+                }
+            } catch (e) {
+                alert("An error occurred during merging.");
+                console.error("Merge error:", e);
+            } finally {
+                mergeBtn.disabled = false;
+                mergeBtn.textContent = "Merge Similar Boxes";
             }
         };
 
