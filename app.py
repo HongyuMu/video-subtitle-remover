@@ -43,8 +43,8 @@ def check_memory_usage():
         memory_info = process.memory_info()
         memory_mb = memory_info.rss / 1024 / 1024
         
-        # Assume 2048MB limit
-        memory_limit_mb = 2048
+        # Assume 4096MB limit
+        memory_limit_mb = 4096
         memory_percentage = (memory_mb / memory_limit_mb) * 100
         
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
@@ -424,32 +424,6 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
         "download_url": f"/download_video/{processed_video_path.name}"
     }
 
-
-@app.post("/remove_subtitles/")
-async def remove_subtitles(
-    file: UploadFile = File(...),
-    json_file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = BackgroundTasks()):
-    temp_video_path = save_temp_file(file)
-    temp_json_path = save_temp_file(json_file, suffix=".json")
-    # Use the original filename (without extension) for output and status files
-    original_stem = Path(file.filename).stem
-    processed_video_path = PROCESSED_DIR / f"processed_{original_stem}.mp4"
-    status_file = PROCESSED_DIR / f"{original_stem}.status"
-
-    # Start background task, pass original_stem for naming
-    background_tasks.add_task(
-        process_video,
-        temp_video_path,
-        temp_json_path,
-        processed_video_path,
-        status_file
-    )
-    return {
-        "message": "Video and JSON received. Subtitle removal started.",
-        "status_url": f"/status/{status_file.name}",
-        "download_url": f"/download_video/{processed_video_path.name}"
-    }
 
 # Call the SubtitleRemover class to remove subtitles
 def process_video(video_path, json_path, output_path, status_file):
