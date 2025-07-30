@@ -220,7 +220,7 @@ async def find_subtitles(
         raise e
 
 
-@app.get("/subtitle_intervals/{task_id}")
+@app.get("/subtitle_intervals/{task_id}", include_in_schema=False)
 async def get_subtitle_intervals(task_id: str):
     """
     Returns all intervals and their current rectangles for a given task_id.
@@ -255,7 +255,7 @@ def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_i
             cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
     return frame
 
-@app.get("/show_subtitle_box/{task_id}")
+@app.get("/show_subtitle_box/{task_id}", include_in_schema=False)
 async def show_subtitle_box(
     task_id: str, 
     frame_idx: int = 0,
@@ -311,7 +311,7 @@ class AdjustSubtitleBoxRequest(BaseModel):
     width: Optional[int] = Field(None, description="New width of the box")
     height: Optional[int] = Field(None, description="New height of the box")
 
-@app.post("/adjust_box/{task_id}")
+@app.post("/adjust_box/{task_id}", include_in_schema=False)
 async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     """
     Adjust a subtitle box for a specific interval using slider-like properties (x, y, width, height).
@@ -370,7 +370,7 @@ async def get_editor(task_id: str, request: Request):
 
 
 # Sends the task info to the editor page (video dimensions, filename, user_id)
-@app.get("/task_info/{task_id}")
+@app.get("/task_info/{task_id}", include_in_schema=False)
 async def get_task_info(task_id: str):
     """
     Returns metadata for a given task, including video dimensions.
@@ -387,7 +387,7 @@ async def get_task_info(task_id: str):
     }
 
 # 
-@app.post("/process_task/{task_id}")
+@app.post("/process_task/{task_id}", include_in_schema=False)
 async def process_task(task_id: str, background_tasks: BackgroundTasks):
     """
     Starts the subtitle removal process for a task that has been edited.
@@ -456,7 +456,7 @@ async def get_status(status_filename: str):
     return JSONResponse(content={"status": status})
 
 
-@app.get("/download_video/{video_filename}")
+@app.get("/download_video/{video_filename}", include_in_schema=False)
 async def download_video(video_filename: str):
     video_path = PROCESSED_DIR / video_filename
     if not video_path.exists():
@@ -524,7 +524,7 @@ def merge_intervals(intervals, distinct_coords):
     
     return new_intervals, new_distinct_coords
 
-@app.post("/merge_similar_intervals/{task_id}")
+@app.post("/merge_similar_intervals/{task_id}", include_in_schema=False)
 async def merge_similar_intervals(task_id: str):
     """
     Merge intervals that have similar coordinates after user edits.
