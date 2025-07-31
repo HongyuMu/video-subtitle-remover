@@ -113,8 +113,8 @@ SUBTITLE_AREA_DEVIATION_PIXEL = 20
 # 同于判断两个文本框是否为同一行字幕，高度差距指定像素点以内认为是同一行
 THRESHOLD_HEIGHT_DIFFERENCE = 20
 # 用于判断两个字幕文本的矩形框是否相似，如果X轴和Y轴偏差都在指定阈值内，则认为时同一个文本框
-PIXEL_TOLERANCE_Y = 20  # 允许检测框纵向偏差的像素点数
-PIXEL_TOLERANCE_X = 20  # 允许检测框横向偏差的像素点数
+PIXEL_TOLERANCE_Y = 10  # 允许检测框纵向偏差的像素点数
+PIXEL_TOLERANCE_X = 10  # 允许检测框横向偏差的像素点数
 # ×××××××××× 通用设置 end ××××××××××
 
 # ×××××××××× InpaintMode.STTN算法设置 start ××××××××××
