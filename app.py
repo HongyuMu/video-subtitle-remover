@@ -273,13 +273,22 @@ async def get_subtitle_intervals(task_id: str):
 def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_idx):
     """
     Draws rectangles for all subtitle regions active at the current frame.
+    Expands the box by 10 pixels to ensure full coverage.
     """
+    frame_height, frame_width, _ = frame.shape
     for coord, (start, end) in zip(distinct_coords, frame_intervals):
         if coord is None:
             continue
         if start <= current_frame_idx <= end:
-            xmin, xmax, ymin, ymax = coord  # adjust order if needed
-            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+            xmin, xmax, ymin, ymax = coord
+            
+            # Expand by 10 pixels in each direction, clamping to video dimensions
+            expanded_xmin = max(0, xmin - 10)
+            expanded_xmax = min(frame_width, xmax + 10)
+            expanded_ymin = max(0, ymin - 10)
+            expanded_ymax = min(frame_height, ymax + 10)
+            
+            cv2.rectangle(frame, (expanded_xmin, expanded_ymin), (expanded_xmax, expanded_ymax), (0, 255, 0), 2)
     return frame
 
 @app.get("/show_subtitle_box/{task_id}", include_in_schema=False)
