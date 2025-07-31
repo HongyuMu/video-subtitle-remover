@@ -203,12 +203,48 @@ class SubtitleDetect:
 
     @staticmethod
     def are_similar(region1, region2):
-        """判断两个区域是否相似。"""
+        """
+        判断两个区域是否相似。
+        A stricter check that considers both corner proximity and dimension similarity.
+        """
+        if not region1 or not region2:
+            return False
+
         xmin1, xmax1, ymin1, ymax1 = region1
         xmin2, xmax2, ymin2, ymax2 = region2
 
-        return abs(xmin1 - xmin2) <= config.PIXEL_TOLERANCE_X and abs(xmax1 - xmax2) <= config.PIXEL_TOLERANCE_X and \
-            abs(ymin1 - ymin2) <= config.PIXEL_TOLERANCE_Y and abs(ymax1 - ymax2) <= config.PIXEL_TOLERANCE_Y
+        # Check for invalid boxes
+        if any(v is None for v in [xmin1, xmax1, ymin1, ymax1, xmin2, xmax2, ymin2, ymax2]):
+            return False
+
+        width1 = xmax1 - xmin1
+        height1 = ymax1 - ymin1
+        width2 = xmax2 - xmin2
+        height2 = ymax2 - ymin2
+        
+        # Prevent division by zero or invalid boxes
+        if min(width1, height1, width2, height2) <= 0:
+            return False
+
+        # Original corner proximity check
+        corners_are_close = (
+            abs(xmin1 - xmin2) <= config.PIXEL_TOLERANCE_X and
+            abs(xmax1 - xmax2) <= config.PIXEL_TOLERANCE_X and
+            abs(ymin1 - ymin2) <= config.PIXEL_TOLERANCE_Y and
+            abs(ymax1 - ymax2) <= config.PIXEL_TOLERANCE_Y
+        )
+
+        width_diff = abs(width1 - width2)
+        height_diff = abs(height1 - height2)
+        
+        # Dimensions are similar if their difference is less than 20% of the smaller dimension.
+        dimensions_are_similar = (
+            width_diff < min(width1, width2) * 0.2 and
+            height_diff < min(height1, height2) * 0.2
+        )
+        
+        # Both position and size must be similar
+        return corners_are_close and dimensions_are_similar
 
     def unify_regions(self, raw_regions):
         """将连续相似的区域统一，保持列表结构。"""

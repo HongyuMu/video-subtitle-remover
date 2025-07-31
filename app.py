@@ -198,7 +198,7 @@ async def find_subtitles(
                 current_start, current_end = sub_frame_no_list_continuous[i]
                 
                 # If the gap is small and boxes are similar, merge them
-                if (current_start - last_end <= 5): # Merge if gap is smaller than 5 frames
+                if (current_start - last_end <= 3): # Merge if gap is smaller than 3 frames
                     # Extend the previous interval
                     merged_intervals[-1] = (last_start, current_end)
                 else:
