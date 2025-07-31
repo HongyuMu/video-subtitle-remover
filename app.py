@@ -187,10 +187,35 @@ async def find_subtitles(
         # Get the first entry of each subtitle area as the true subtitle
         first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
         sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        
+        # Merge nearby intervals to reduce manual work for users
+        merged_intervals = []
+        if sub_frame_no_list_continuous:
+            merged_intervals.append(sub_frame_no_list_continuous[0])
+            for i in range(1, len(sub_frame_no_list_continuous)):
+                last_start, last_end = merged_intervals[-1]
+                current_start, current_end = sub_frame_no_list_continuous[i]
+                
+                # If the gap is small and boxes are similar, merge them
+                if (current_start - last_end <= 5): # Merge if gap is smaller than 5 frames
+                    # Extend the previous interval
+                    merged_intervals[-1] = (last_start, current_end)
+                else:
+                    merged_intervals.append((current_start, current_end))
+        sub_frame_no_list_continuous = merged_intervals
+
         distinct_coords = [
             first_entry_dict[elapse[0]] if elapse[0] in first_entry_dict else None
             for elapse in sub_frame_no_list_continuous
         ]
+        
+        # Unify coordinates for merged intervals
+        if len(distinct_coords) > 1:
+            for i in range(1, len(distinct_coords)):
+                if distinct_coords[i-1] is not None and distinct_coords[i] is not None:
+                    if SubtitleDetect.are_similar(distinct_coords[i-1], distinct_coords[i]):
+                        distinct_coords[i] = distinct_coords[i-1]
+
         json_content = {
             "distinct_coordinates": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous

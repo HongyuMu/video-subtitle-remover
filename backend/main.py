@@ -535,7 +535,7 @@ class SubtitleDetect:
         sub_area_with_frequency = self.get_frequency_in_range(sub_frame_no_list_continuous, subtitle_frame_no_box_dict)
         correct_sub_area = []
         for sub_area in sub_area_with_frequency.keys():
-            if sub_area_with_frequency[sub_area] >= (fps // 10):
+            if sub_area_with_frequency[sub_area] >= (fps // 5):
                 correct_sub_area.append(sub_area)
             else:
                 print(f'drop {sub_area}')
@@ -1005,6 +1005,39 @@ class SubtitleRemover:
                 else:
                     print(f'failed to delete temp file {self.video_temp_file.name}')
 
+    def get_video_bitrate(self, video_path):
+        """
+        Get video bitrate by calculating it from file size and duration.
+        :param video_path: Path to the video file.
+        :return: Bitrate in kbps, or 0 if unable to determine.
+        """
+        try:
+            if not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+                return 0
+
+            file_size_bits = os.path.getsize(video_path) * 8
+            
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return 0
+            
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            
+            duration_seconds = 0
+            if fps > 0 and frame_count > 0:
+                duration_seconds = frame_count / fps
+            
+            if duration_seconds > 0:
+                bitrate_kbps = (file_size_bits / duration_seconds) / 1000
+                return round(bitrate_kbps, 2)
+            
+            return 0
+        except Exception as e:
+            print(f"Could not calculate bitrate for {video_path}: {e}")
+            return 0
+            
     def merge_audio_to_video(self):
         # 创建音频临时对象，windows下delete=True会有permission denied的报错
         temp = tempfile.NamedTemporaryFile(suffix='.aac', delete=False)
@@ -1086,7 +1119,9 @@ if __name__ == '__main__':
             intervals = json_data.get("frame_intervals")
 
             sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
+            print(f"Bitrate of original video: {sd.get_video_bitrate(video_path)} kbps")
             sd.run()
+            print(f"Bitrate of processed video: {sd.get_video_bitrate(sd.video_out_name)} kbps")
         except FileNotFoundError:
             print(f"Error: The file '{json_path}' was not found.")
         except json.JSONDecodeError:
