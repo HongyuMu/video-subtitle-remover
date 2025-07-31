@@ -457,12 +457,13 @@
                     const data = await response.json();
                     alert(`Merge complete! ${data.original_count} intervals were combined into ${data.merged_count}. The editor will now refresh to the beginning of the new list for review.`);
                     
-                    // FIX: Reset the index to 0 to avoid "index out of range" errors.
-                    // This provides a clean starting point for reviewing the new merged intervals.
-                    currentIntervalIdx = 0;
+                    // Directly update the UI with the new merged intervals from the response
+                    intervals = data.intervals;
+                    originalIntervals = JSON.parse(JSON.stringify(data.intervals)); // Update the pristine copy
 
-                    // Reload the editor with the new, merged intervals
-                    await initializeEditor(); 
+                    // Reset the index to 0 and load the first new interval
+                    currentIntervalIdx = 0;
+                    await loadInterval(currentIntervalIdx);
                 } else {
                     alert("Failed to merge intervals.");
                 }
