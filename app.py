@@ -359,16 +359,26 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-@app.get("/editor/{task_id}", response_class=HTMLResponse)
-async def get_editor(task_id: str, request: Request):
+@app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=True)
+async def get_editor(task_id: str, request: Request, format: Optional[str] = None):
     """
     Serve the HTML editor page for a given task.
+    - By default, serves HTML to browser clients (who send an `Accept: text/html` header).
+    - Use the query parameter `?format=json` to force a JSON response with the editor URL.
     """
     result = TASK_RESULTS.get(task_id)
     if not result:
         return HTMLResponse(content="<h1>Task not found</h1>", status_code=404)
     
-    # Check the Accept header
+    # Allow forcing JSON response via query parameter
+    if format and format.lower() == 'json':
+        editor_url = str(request.url_for('get_editor', task_id=task_id))
+        return JSONResponse(content={
+            "message": "Task is ready for editing.",
+            "editor_url": editor_url
+        })
+    
+    # Check the Accept header for browser-like requests
     accept_header = request.headers.get("accept", "")
     if "text/html" in accept_header:
         # Browser client, serve the HTML page
