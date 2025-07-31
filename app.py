@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
+from backend.main import find_smallest_bounding_box
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -196,32 +197,25 @@ async def find_subtitles(
                 last_start, last_end = merged_intervals[-1]
                 current_start, current_end = sub_frame_no_list_continuous[i]
                 
-                # Get the representative box for each interval to check for similarity
-                box_of_last_interval = first_entry_dict.get(last_start)
-                box_of_current_interval = first_entry_dict.get(current_start)
-
-                # Merge if the time gap is small AND the boxes are geometrically similar
-                if (current_start - last_end <= 5) and \
-                    box_of_last_interval and box_of_current_interval and \
-                    SubtitleDetect.are_similar(box_of_last_interval, box_of_current_interval):
+                # If the gap is small and boxes are similar, merge them
+                if (current_start - last_end <= 5): # Merge if gap is smaller than 5 frames
                     # Extend the previous interval
                     merged_intervals[-1] = (last_start, current_end)
                 else:
                     merged_intervals.append((current_start, current_end))
         sub_frame_no_list_continuous = merged_intervals
 
-        distinct_coords = [
-            first_entry_dict[elapse[0]] if elapse[0] in first_entry_dict else None
-            for elapse in sub_frame_no_list_continuous
-        ]
+        distinct_coords = []
+        for start, end in sub_frame_no_list_continuous:
+            coords_in_interval = [
+                first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict
+            ]
+            if coords_in_interval:
+                unified_box = find_smallest_bounding_box(coords_in_interval)
+                distinct_coords.append(unified_box)
+            else:
+                distinct_coords.append(None) # Should not happen, but as a fallback
         
-        # Unify coordinates for merged intervals
-        if len(distinct_coords) > 1:
-            for i in range(1, len(distinct_coords)):
-                if distinct_coords[i-1] is not None and distinct_coords[i] is not None:
-                    if SubtitleDetect.are_similar(distinct_coords[i-1], distinct_coords[i]):
-                        distinct_coords[i] = distinct_coords[i-1]
-
         json_content = {
             "distinct_coordinates": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous
@@ -548,8 +542,7 @@ def merge_intervals(intervals, distinct_coords):
             continue
             
         # Start a new group
-        current_group = [(interval1, coords1)]
-        used_indices.add(i)
+        current_group_indices = [i]
         
         # Find all similar intervals
         for j, (interval2, coords2) in enumerate(interval_coords[i+1:], i+1):
@@ -557,12 +550,12 @@ def merge_intervals(intervals, distinct_coords):
                 continue
                 
             if SubtitleDetect.are_similar(coords1, coords2):
-                current_group.append((interval2, coords2))
-                used_indices.add(j)
+                current_group_indices.append(j)
         
         # Merge the group
-        if len(current_group) > 1:
+        if len(current_group_indices) > 1:
             # Sort by start frame
+            current_group = [interval_coords[k] for k in current_group_indices]
             current_group.sort(key=lambda x: x[0][0])
             
             # Merge intervals
@@ -570,13 +563,16 @@ def merge_intervals(intervals, distinct_coords):
             merged_end = current_group[-1][0][1]
             merged_interval = (merged_start, merged_end)
             
-            # Use the first coordinates (or could average them)
-            merged_coords = current_group[0][1]
+            # Use the bounding box that covers all merged coordinates
+            all_coords = [item[1] for item in current_group]
+            merged_coords = find_smallest_bounding_box(all_coords)
             
             merged_groups.append((merged_interval, merged_coords))
+            used_indices.update(current_group_indices)
         else:
             # Single interval, keep as is
             merged_groups.append((interval1, coords1))
+            used_indices.add(i)
     
     # Sort by start frame
     merged_groups.sort(key=lambda x: x[0][0])

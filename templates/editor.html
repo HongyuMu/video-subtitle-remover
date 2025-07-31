@@ -229,6 +229,9 @@
                 originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals)); // Deep copy for reset
                 taskInfo = infoData;
                 
+                // Set the initial step value for all sliders
+                updateSliderSteps();
+
                 // Load the first interval into the editor UI
                 await loadInterval(currentIntervalIdx);
             } catch (error) {
@@ -374,18 +377,21 @@
 
         // --- EVENT LISTENERS ---
 
+        // A function to apply the current step value to all sliders
+        function updateSliderSteps() {
+            const stepValue = parseInt(stepInput.value);
+            for (const key in sliders) {
+                sliders[key].step = stepValue;
+            }
+        }
+
         // Attach the handleSliderInput function to all sliders.
         for (const key in sliders) {
             sliders[key].oninput = handleSliderInput;
             values[key].onchange = () => handleNumberInput(key);
         }
 
-        stepInput.onchange = () => {
-            const stepValue = parseInt(stepInput.value);
-            for (const key in sliders) {
-                sliders[key].step = stepValue;
-            }
-        };
+        stepInput.onchange = updateSliderSteps;
 
         resetBtn.onclick = () => {
             if (!originalIntervals.length) return;

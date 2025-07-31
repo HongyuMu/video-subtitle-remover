@@ -1084,11 +1084,13 @@ class SubtitleRemover:
     
 def find_smallest_bounding_box(coordinates):
     # Initialize min and max values based on the first box
-    xmin = xmax = coordinates[0][0]
-    ymin = ymax = coordinates[0][2]
+    if not coordinates:
+        return None
+    
+    xmin, xmax, ymin, ymax = coordinates[0]
 
     # Loop through all the coordinates to find the overall bounding box
-    for box in coordinates:
+    for box in coordinates[1:]:
         xmin = min(xmin, box[0])
         xmax = max(xmax, box[1])
         ymin = min(ymin, box[2])
