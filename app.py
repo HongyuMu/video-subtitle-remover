@@ -187,35 +187,67 @@ async def find_subtitles(
 
         # Get the first entry of each subtitle area as the true subtitle
         first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        
+        # Create initial intervals based on identical masks
         sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
         
-        # Merge nearby intervals to reduce manual work for users
-        merged_intervals = []
-        if sub_frame_no_list_continuous:
-            merged_intervals.append(sub_frame_no_list_continuous[0])
-            for i in range(1, len(sub_frame_no_list_continuous)):
-                last_start, last_end = merged_intervals[-1]
-                current_start, current_end = sub_frame_no_list_continuous[i]
-                
-                # If the gap is small and boxes are similar, merge them
-                if (current_start - last_end <= 3): # Merge if gap is smaller than 3 frames
-                    # Extend the previous interval
-                    merged_intervals[-1] = (last_start, current_end)
-                else:
-                    merged_intervals.append((current_start, current_end))
-        sub_frame_no_list_continuous = merged_intervals
-
-        distinct_coords = []
+        print(f"[DEBUG] Initial intervals: {len(sub_frame_no_list_continuous)}")
+        
+        # Calculate representative bounding box for each interval
+        initial_coords = []
         for start, end in sub_frame_no_list_continuous:
             coords_in_interval = [
                 first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict
             ]
             if coords_in_interval:
                 unified_box = find_smallest_bounding_box(coords_in_interval)
-                distinct_coords.append(unified_box)
+                initial_coords.append(unified_box)
             else:
-                distinct_coords.append(None) # Should not happen, but as a fallback
+                initial_coords.append(None)
         
+        # Merge nearby intervals based on both gap size AND box similarity
+        merged_intervals = []
+        merged_coords = []
+        
+        if sub_frame_no_list_continuous:
+            merged_intervals.append(sub_frame_no_list_continuous[0])
+            merged_coords.append(initial_coords[0])
+            
+            for i in range(1, len(sub_frame_no_list_continuous)):
+                last_start, last_end = merged_intervals[-1]
+                current_start, current_end = sub_frame_no_list_continuous[i]
+                
+                prev_coord = merged_coords[-1]
+                current_coord = initial_coords[i]
+                
+                # Skip if either coordinate is None
+                if prev_coord is None or current_coord is None:
+                    merged_intervals.append((current_start, current_end))
+                    merged_coords.append(current_coord)
+                    continue
+                
+                # Check if boxes are geometrically similar
+                boxes_are_similar = SubtitleDetect.are_similar(prev_coord, current_coord)
+                
+                # Adaptive gap threshold: larger for similar boxes, smaller for dissimilar ones
+                max_gap = 10 if boxes_are_similar else 3
+                gap_is_small = (current_start - last_end) <= max_gap
+                
+                if gap_is_small and boxes_are_similar:
+                    # Merge intervals and create a bounding box that encompasses both
+                    merged_intervals[-1] = (last_start, current_end)
+                    merged_coords[-1] = find_smallest_bounding_box([prev_coord, current_coord])
+                else:
+                    # Keep as separate interval
+                    merged_intervals.append((current_start, current_end))
+                    merged_coords.append(current_coord)
+        
+        print(f"[DEBUG] After merging: {len(merged_intervals)} intervals")
+        
+        # Use the merged results
+        sub_frame_no_list_continuous = merged_intervals
+        distinct_coords = merged_coords
+
         json_content = {
             "distinct_coordinates": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous
