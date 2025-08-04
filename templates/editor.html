@@ -422,17 +422,30 @@
             if (currentIntervalIdx > 0) {
                 const lastInterval = intervals[currentIntervalIdx - 1];
                 const [xmin, xmax, ymin, ymax] = lastInterval.coords;
-                const lastBox = {
-                    x: xmin,
-                    y: ymin,
-                    width: xmax - xmin,
-                    height: ymax - ymin
-                };
+                const isNullBox = xmin === 0 && xmax === 0 && ymin === 0 && ymax === 0;
 
-                // Update UI and save the new box
-                updateSliderValues(lastBox);
-                redrawCanvas(lastBox); // Explicitly redraw with the new box
-                saveBox(lastBox);
+                if (isNullBox) {
+                    // If the last box was marked as "not a subtitle", apply the same state
+                    // to the current box and automatically advance to the next one.
+                    const nullBox = { x: 0, y: 0, width: 0, height: 0 };
+                    updateSliderValues(nullBox);
+                    redrawCanvas(nullBox);
+                    saveBox(nullBox);
+                    if (currentIntervalIdx < intervals.length - 1) {
+                        loadInterval(currentIntervalIdx + 1);
+                    }
+                } else {
+                    // Otherwise, just copy the last box's dimensions.
+                    const lastBox = {
+                        x: xmin,
+                        y: ymin,
+                        width: xmax - xmin,
+                        height: ymax - ymin
+                    };
+                    updateSliderValues(lastBox);
+                    redrawCanvas(lastBox);
+                    saveBox(lastBox);
+                }
             }
         };
 
@@ -446,6 +459,10 @@
             saveBox(nullBox);
 
             alert('This interval has been marked as "Not a Subtitle" and will be skipped.');
+            // Automatically advance to the next interval if we are not on the last one.
+            if (currentIntervalIdx < intervals.length - 1) {
+                loadInterval(currentIntervalIdx + 1);
+            }
         };
 
         mergeBtn.onclick = async () => {
