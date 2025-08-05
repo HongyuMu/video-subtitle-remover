@@ -37,7 +37,9 @@ class SubtitleDetect:
     def __init__(self, video_path, sub_area=None):
         self.video_path = video_path
         self.sub_area = sub_area
-        self.text_detector = ModelManager.get_text_detector()
+        # Initialize the text detector only if it hasn't been initialized
+        if not hasattr(self, 'text_detector') or self.text_detector is None:
+            self.text_detector = ModelManager.get_text_detector()
 
     def detect_subtitle(self, img):
         dt_boxes, elapse = self.text_detector(img)
