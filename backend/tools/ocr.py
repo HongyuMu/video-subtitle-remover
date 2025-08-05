@@ -44,7 +44,7 @@ class OcrRecogniser:
             use_angle_cls=True,
             lang=config.REC_CHAR_TYPE,
             rec_model_dir=config.REC_MODEL_PATH,
-            rec_image_shape='3, 32, 320',
+            rec_image_shape='3, 48, 320',
             use_gpu=config.USE_GPU
         )
 
