@@ -1,5 +1,6 @@
 import copy
 import time
+import gc
 
 import cv2
 import numpy as np
@@ -15,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from backend import config
 from backend.inpaint.sttn.auto_sttn import InpaintGenerator
 from backend.inpaint.utils.sttn_utils import Stack, ToTorchFormatTensor
-from backend.tools.inpaint_tools import create_mask
+from backend.tools.inpaint_tools import create_mask, batch_generator
 
 # define image preprocessing
 _to_tensors = transforms.Compose([
@@ -266,179 +267,110 @@ class STTNInpaint:
 
 
 class STTNVideoInpaint:
-
-    def read_frame_info_from_video(self):
-        # use opencv to read video
-        reader = cv2.VideoCapture(self.video_path)
-        # get video width, height, frame rate and frame count information and store in frame_info dictionary
-        frame_info = {
-            'W_ori': int(reader.get(cv2.CAP_PROP_FRAME_WIDTH) + 0.5),  # original width
-            'H_ori': int(reader.get(cv2.CAP_PROP_FRAME_HEIGHT) + 0.5),  # original height
-            'fps': reader.get(cv2.CAP_PROP_FPS),  # frame rate
-            'len': int(reader.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)  # total frame count
-        }
-        # return video reader, frame info and video writer
-        return reader, frame_info
-
     def __init__(self, video_path, mask_path=None, clip_gap=None, subtitle_areas=None, frame_intervals=None):
         # initialize STTNInpaint instance
         self.sttn_inpaint = STTNInpaint()
-        # video and mask path
         self.video_path = video_path
         self.mask_path = mask_path
-        # new: subtitle area and frame interval
         self.subtitle_areas = subtitle_areas
         self.frame_intervals = frame_intervals
-        # set output video file path
         self.video_out_path = os.path.join(
             os.path.dirname(os.path.abspath(self.video_path)),
             f"{os.path.basename(self.video_path).rsplit('.', 1)[0]}_no_sub.mp4"
         )
-        # set maximum frame count that can be loaded in one processing
         if clip_gap is None:
             self.clip_gap = config.STTN_MAX_LOAD_NUM
         else:
             self.clip_gap = clip_gap
 
     def __call__(self, input_mask=None, input_sub_remover=None, tbar=None):
-        reader = None
-        writer = None
-        try:
-            reader, frame_info = self.read_frame_info_from_video()
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            print("Error: Could not open video.")
+            return
+
+        frame_info = {
+            'W_ori': int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) + 0.5),
+            'H_ori': int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) + 0.5),
+            'fps': cap.get(cv2.CAP_PROP_FPS),
+            'len': int(cap.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)
+        }
+        total_frames = frame_info['len']
+        writer = input_sub_remover.video_writer
+
+        inpainted_results = {}
+        total_frames_processed_inpaint = 0
+
+        for i, interval in enumerate(self.frame_intervals):
+            start_frame, end_frame = interval[0] - 1, interval[1] - 1  # Convert to 0-based
+            print(f"[STTN] Start processing frames {start_frame + 1} to {end_frame + 1} (interval {i + 1}/{len(self.frame_intervals)})")
+
+            mask_area_coordinates = [self.subtitle_areas[i]]
+            mask = create_mask(input_sub_remover.mask_size, mask_area_coordinates)
+            if mask.ndim == 2:
+                mask = mask[:, :, None]
+
+            print(f"[STTN] Mask size: {input_sub_remover.mask_size}, inpainting area: {mask_area_coordinates[0]}")
+
+            frames_to_process = []
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+            for _ in range(start_frame, end_frame + 1):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                frames_to_process.append(frame)
+
+            if not frames_to_process:
+                continue
+
+            num_batches = (len(frames_to_process) + config.STTN_MAX_LOAD_NUM - 1) // config.STTN_MAX_LOAD_NUM
+            inpainted_interval_frames = []
+            for b_idx, batch in enumerate(batch_generator(frames_to_process, config.STTN_MAX_LOAD_NUM)):
+                print(f"[STTN] Processing batch {b_idx + 1}/{num_batches} ({len(batch)} frames)")
+                if len(batch) >= 1:
+                    inpainted_batch = self.sttn_inpaint(batch, mask)
+                    inpainted_interval_frames.extend(inpainted_batch)
+            
+            for j, frame_content in enumerate(inpainted_interval_frames):
+                inpainted_results[start_frame + j] = frame_content
+            
+            total_frames_processed_inpaint += len(frames_to_process)
+            print(f"[STTN] Finished interval {i + 1}/{len(self.frame_intervals)}: processed {total_frames_processed_inpaint} frames for inpainting so far.")
+
+            del frames_to_process
+            del inpainted_interval_frames
+            if 'batch' in locals():
+                del batch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            gc.collect()
+
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # Use the existing tbar from SubtitleRemover instead of creating a new one
+        for i in range(total_frames):
+            if i in inpainted_results:
+                writer.write(inpainted_results[i])
+                # Advance the video capture position to keep it in sync
+                ret, _ = cap.read() 
+                if not ret:
+                    print(f"Warning: Could not read frame {i+1} to advance capture.")
+            else:
+                ret, frame = cap.read()
+                if ret:
+                    writer.write(frame)
+                else:
+                    print(f"Warning: Could not read frame {i+1} from source video.")
+            
+            # This progress update is now redundant if tbar is passed from SubtitleRemover
+            # SubtitleRemover's main loop should handle the progress bar.
+            # For now, this is left for standalone script usage.
             if input_sub_remover is not None:
-                writer = input_sub_remover.video_writer
-            else:
-                writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
+                 if tbar is not None:
+                     input_sub_remover.progress_remover = (100 * float(i) / float(total_frames))
+                     input_sub_remover.progress_total = 50 + (input_sub_remover.progress_remover // 2)
 
-            total_frames = frame_info['len']
-            all_frames = []
-            for i in range(total_frames):
-                success, frame = reader.read()
-                if not success:
-                    all_frames.append(None)
-                else:
-                    all_frames.append(frame)
-
-            # Build a list of intervals as (start, end) tuples, 0-based
-            intervals_0_based = []
-            if self.frame_intervals is not None:
-                for interval in self.frame_intervals:
-                    s, e = interval
-                    s = max(0, int(s) - 1)
-                    e = min(total_frames - 1, int(e) - 1)
-                    intervals_0_based.append((s, e))
-
-            # Map each frame index to its interval index (if any)
-            # This avoids processing frames that are not in any interval (without subtitles)
-            frame_to_interval = {}
-            if intervals_0_based:
-                for idx, (s, e) in enumerate(intervals_0_based):
-                    for f in range(s, e + 1):
-                        frame_to_interval[f] = idx
-
-            # Prepare inpainting batches for each interval
-            interval_batches = [[] for _ in intervals_0_based]
-            interval_indices = [[] for _ in intervals_0_based]
-
-            # tqdm bar for overall progress if not provided
-            show_tqdm = tbar is None
-            if show_tqdm:
-                pbar = tqdm(total=total_frames, unit='frame', desc='STTN Subtitle Removal', position=0, file=sys.__stdout__)
-            else:
-                pbar = None
-
-            # First, collect all frames for inpainting or direct writing
-            for i in range(total_frames):
-                if all_frames[i] is None:
-                    continue
-                if i in frame_to_interval:
-                    idx = frame_to_interval[i]
-                    interval_batches[idx].append(all_frames[i])
-                    interval_indices[idx].append(i)
-
-            # Process each interval batch for inpainting and store results in a dict
-            inpainted_dict = {}
-            frames_processed = 0
-            if self.subtitle_areas is not None and self.frame_intervals is not None:
-                for idx, (frames_to_inpaint, valid_indices) in enumerate(zip(interval_batches, interval_indices)):
-                    if not frames_to_inpaint:
-                        continue
-                    area = self.subtitle_areas[idx]
-                    s, e = intervals_0_based[idx]
-                    print(f"[STTN] Start processing frames {s} to {e + 1} (interval {idx+1}/{len(self.frame_intervals)})")
-                    mask_size = (frame_info['H_ori'], frame_info['W_ori'])
-                    print(f"[STTN] Mask size: {mask_size}, inpainting area: {area}")
-                    mask = create_mask(mask_size, [area])
-
-                    # Convert mask to 3-channel format if needed
-                    # The 3-color-channel format is required for the inpaint function to color images
-                    if mask.ndim == 2:
-                        mask = mask[:, :, None]
-                    
-                    # Process frames in batches to avoid memory issues
-                    batch_size = config.STTN_MAX_LOAD_NUM
-                    inpainted_frames = []
-                    
-                    for batch_start in range(0, len(frames_to_inpaint), batch_size):
-                        batch_end = min(batch_start + batch_size, len(frames_to_inpaint))
-                        batch_frames = frames_to_inpaint[batch_start:batch_end]
-                        print(f"[STTN] Processing batch {batch_start//batch_size + 1}/{(len(frames_to_inpaint) + batch_size - 1)//batch_size} ({len(batch_frames)} frames)")
-                        
-                        try:
-                            batch_result = self.sttn_inpaint(batch_frames, mask)
-                            inpainted_frames.extend(batch_result)
-                        except Exception as e:
-                            print(f"[ERROR] Failed to process batch: {e}")
-                            print(f"[INFO] Trying with CPU...")
-                            # Fallback to CPU if GPU fails
-                            original_device = self.sttn_inpaint.device
-                            self.sttn_inpaint.device = torch.device("cpu")
-                            self.sttn_inpaint.model = self.sttn_inpaint.model.to("cpu")
-                            try:
-                                batch_result = self.sttn_inpaint(batch_frames, mask)
-                                inpainted_frames.extend(batch_result)
-                            finally:
-                                self.sttn_inpaint.device = original_device
-                                self.sttn_inpaint.model = self.sttn_inpaint.model.to(original_device)
-                    
-                    for j, i_frame in enumerate(valid_indices):
-                        if j < len(inpainted_frames):
-                            # Store the inpainted frame in the dictionary
-                            inpainted_dict[i_frame] = inpainted_frames[j]
-                        else:
-                            # if frame is not processed, use original frame
-                            print(f"[WARNING] Frame {i_frame} not processed - using original frame")
-                            inpainted_dict[i_frame] = all_frames[i_frame]
-                    frames_processed += len(valid_indices)
-                    print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
-
-            # Now, write all frames in original order, using inpainted frames where available
-            # This ensures the output video has the same frame order as the input video
-            for i in range(total_frames):
-                if all_frames[i] is None:
-                    if show_tqdm:
-                        pbar.update(1)
-                    continue
-                if i in inpainted_dict:
-                    frame = inpainted_dict[i]
-                else:
-                    frame = all_frames[i]
-                writer.write(frame)
-                if input_sub_remover is not None:
-                    if tbar is not None:
-                        input_sub_remover.update_progress(tbar, increment=1)
-                    if input_sub_remover.gui_mode:
-                        input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
-                if show_tqdm:
-                    pbar.update(1)
-            if show_tqdm:
-                pbar.close()
-            print(f"[STTN] All frames processed and written to output video. Total frames: {total_frames}")
-        except Exception as e:
-            print(f"Error during video processing: {str(e)}")
-        finally:
-            if writer:
-                writer.release()
+        print(f"[STTN] All frames processed and written to output video. Total frames: {total_frames}")
+        cap.release()
 
 
 if __name__ == '__main__':
