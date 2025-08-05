@@ -21,10 +21,25 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 from backend.main import find_smallest_bounding_box
-from backend.tools.ocr import OcrRecogniser, compare_ocr_result, extract_text_from_frame
+from backend.tools.ocr import OcrRecogniser, compare_ocr_result
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+# --- Global Model Management ---
+class ModelManager:
+    subtitle_detector = None
+    ocr_recogniser = None
+
+@app.on_event("startup")
+async def load_models():
+    """Load deep learning models on application startup."""
+    print("Loading models into memory...")
+    ModelManager.subtitle_detector = SubtitleDetect(video_path=None) # Initialized without a video
+    ModelManager.ocr_recogniser = OcrRecogniser()
+    print("Models loaded successfully.")
+
+# ---------------------------------
 
 @app.get("/")
 async def root():
@@ -38,8 +53,8 @@ PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 
 TASK_RESULTS = {}
 
-def check_memory_usage():
-    """Check current memory usage and warn if approaching limits"""
+def check_memory_usage(return_stats=False):
+    """Check current memory usage and warn if approaching limits. Can also return stats."""
     try:
         process = psutil.Process()
         memory_info = process.memory_info()
@@ -50,6 +65,12 @@ def check_memory_usage():
         memory_percentage = (memory_mb / memory_limit_mb) * 100
         
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
+
+        if return_stats:
+            return {
+                "memory_mb": round(memory_mb, 1),
+                "memory_percentage": round(memory_percentage, 1)
+            }
         
         if memory_percentage > 80:
             print(f"WARNING: Memory usage at {memory_percentage:.1f}%")
@@ -57,6 +78,8 @@ def check_memory_usage():
         return True
     except Exception:
         # If psutil not available, continue
+        if return_stats:
+            return {"memory_mb": -1, "memory_percentage": -1}
         return True
 
 def cleanup_tasks(user_id: Optional[str] = None, all_old: bool = False):
@@ -102,13 +125,21 @@ class CleanupRequest(BaseModel):
 @app.post("/cleanup")
 async def manual_cleanup(request: CleanupRequest):
     """
-    Manually triggers cleanup for a specific user's tasks.
+    Manually triggers cleanup for a specific user's tasks and reports memory usage.
     """
     cleaned_count = cleanup_tasks(user_id=request.user_id)
+    memory_after_cleanup = check_memory_usage(return_stats=True)
+    
     if cleaned_count > 0:
-        return {"message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}."}
+        return {
+            "message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}.",
+            "memory_after_cleanup": memory_after_cleanup
+        }
     else:
-        return {"message": f"No tasks found to clean up for user {request.user_id}."}
+        return {
+            "message": f"No tasks found to clean up for user {request.user_id}.",
+            "memory_after_cleanup": memory_after_cleanup
+        }
 
 
 def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
@@ -169,8 +200,10 @@ async def find_subtitles(
         if not check_memory_usage():
             raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
         
-        # Detect subtitle locations and intervals
-        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
+        # Use the global subtitle detector and update its video path
+        subtitle_detect = ModelManager.subtitle_detector
+        subtitle_detect.video_path = temp_video_path
+        
         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
         if not subtitle_frame_no_box_dict:
             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
@@ -232,17 +265,17 @@ async def find_subtitles(
         
         print(f"[DEBUG] Frames with valid subtitles: {len(representative_boxes_dict)} out of {len(correct_subtitle_frame_no_box_dict)}")
         
-        # Initialize OCR for intelligent text-based merging
-        ocr_recogniser = OcrRecogniser()
+        # Use the global OCR recogniser
+        ocr_recogniser = ModelManager.ocr_recogniser
         ocr_cache = {}
         
         # Create initial intervals using the relaxed continuous ranges method
         initial_intervals = subtitle_detect.find_continuous_ranges_with_same_mask(representative_boxes_dict)
         print(f"[DEBUG] Initial intervals: {len(initial_intervals)}")
         
-        # Now create intelligent merged intervals based on OCR text similarity
-        def create_intelligent_intervals(intervals, boxes_dict, video_cap, ocr_recogniser, ocr_cache):
-            """Create merged intervals based on OCR text comparison from subtitle extractor logic."""
+        # Now create intelligent merged intervals based on coordinate similarity with OCR validation
+        def create_coordinate_based_intervals(intervals, boxes_dict, video_cap, ocr_recogniser, ocr_cache):
+            """Create merged intervals based primarily on coordinate similarity, with optional OCR validation."""
             if not intervals:
                 return [], []
             
@@ -276,7 +309,7 @@ async def find_subtitles(
             
             print(f"[DEBUG] Valid interval data: {len(interval_data)}")
             
-            # Apply OCR-based intelligent merging
+            # Apply coordinate-based intelligent merging with OCR validation
             merged_intervals = [interval_data[0][0]]
             merged_coords = [interval_data[0][1]]
             
@@ -293,52 +326,68 @@ async def find_subtitles(
                 gap = current_start - last_end
                 
                 should_merge = False
+                merge_reason = ""
                 
-                # Strategy 1: Very small gaps (1-2 frames) - likely detection inconsistencies
+                # Strategy 1: Very small gaps (1-2 frames) - always merge (detection jitter)
                 if gap <= 2:
                     should_merge = True
-                    print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: small gap ({gap})")
+                    merge_reason = f"small gap ({gap})"
                 
-                # Strategy 2: OCR text comparison for larger gaps
-                elif gap <= 20:  # Only consider OCR for reasonable gaps
-                    try:
-                        # Get frames for OCR comparison
-                        video_cap.set(cv2.CAP_PROP_POS_FRAMES, last_frame - 1)
-                        ret1, frame1 = video_cap.read()
-                        
-                        video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame - 1)
-                        ret2, frame2 = video_cap.read()
-                        
-                        if ret1 and ret2:
-                            # Crop frames to subtitle regions for more accurate OCR
-                            last_xmin, last_xmax, last_ymin, last_ymax = last_box
-                            current_xmin, current_xmax, current_ymin, current_ymax = current_box
+                # Strategy 2: Coordinate-based similarity analysis
+                elif gap <= 20:  # Only consider merging for reasonable gaps
+                    # Check coordinate similarity using enhanced geometric analysis
+                    coords_similar = analyze_coordinate_similarity(last_box, current_box)
+                    
+                    if coords_similar['high_similarity']:
+                        should_merge = True
+                        merge_reason = f"high coordinate similarity (gap={gap})"
+                    elif coords_similar['medium_similarity'] and gap <= 10:
+                        should_merge = True
+                        merge_reason = f"medium coordinate similarity (gap={gap})"
+                    elif coords_similar['y_position_match'] and gap <= 5:
+                        # Same Y-position (horizontal subtitle line) with small gap
+                        should_merge = True  
+                        merge_reason = f"same Y-position (gap={gap})"
+                    elif coords_similar['medium_similarity'] and gap <= 15:
+                        # For medium similarity with larger gaps, use OCR as validation
+                        try:
+                            # Get frames for OCR validation
+                            video_cap.set(cv2.CAP_PROP_POS_FRAMES, last_frame - 1)
+                            ret1, frame1 = video_cap.read()
                             
-                            frame1_cropped = frame1[last_ymin:last_ymax, last_xmin:last_xmax]
-                            frame2_cropped = frame2[current_ymin:current_ymax, current_xmin:current_xmax]
+                            video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame - 1)
+                            ret2, frame2 = video_cap.read()
                             
-                            # Compare OCR results using the extractor's logic
-                            texts_similar = compare_ocr_result(
-                                ocr_recogniser, frame1_cropped, last_frame, 
-                                frame2_cropped, current_frame, ocr_cache, 
-                                threshold=0.8
-                            )
+                            if ret1 and ret2:
+                                # Crop frames to subtitle regions
+                                last_xmin, last_xmax, last_ymin, last_ymax = last_box
+                                current_xmin, current_xmax, current_ymin, current_ymax = current_box
+                                
+                                frame1_cropped = frame1[last_ymin:last_ymax, last_xmin:last_xmax]
+                                frame2_cropped = frame2[current_ymin:current_ymax, current_xmin:current_xmax]
+                                
+                                # Use OCR to validate the coordinate-based decision
+                                texts_similar = compare_ocr_result(
+                                    ocr_recogniser, frame1_cropped, last_frame, 
+                                    frame2_cropped, current_frame, ocr_cache, 
+                                    threshold=0.75  # Slightly lower threshold since coordinates are already similar
+                                )
+                                
+                                if texts_similar:
+                                    should_merge = True
+                                    merge_reason = f"medium coordinate similarity + OCR validation (gap={gap})"
+                                else:
+                                    merge_reason = f"medium coordinate similarity but different OCR text (gap={gap})"
                             
-                            if texts_similar:
+                        except Exception as e:
+                            print(f"[WARNING] OCR validation failed: {e}")
+                            # Without OCR validation, be more conservative
+                            if coords_similar['high_similarity']:
                                 should_merge = True
-                                print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: similar OCR text")
-                            else:
-                                print(f"[DEBUG] NOT merging frames {last_start}-{last_end} and {current_start}-{current_end}: different OCR text")
-                        
-                    except Exception as e:
-                        print(f"[WARNING] OCR comparison failed: {e}")
-                        # Fall back to geometric similarity for this comparison
-                        boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
-                        if gap <= 5 and boxes_similar:
-                            should_merge = True
-                            print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: fallback geometric similarity")
+                                merge_reason = f"high coordinate similarity without OCR (gap={gap})"
                 
                 if should_merge:
+                    print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: {merge_reason}")
                     # Merge with previous interval
                     merged_intervals[-1] = (last_start, current_end)
                     if last_box and current_box:
@@ -346,20 +395,75 @@ async def find_subtitles(
                     else:
                         merged_coords[-1] = last_box or current_box
                 else:
+                    print(f"[DEBUG] NOT merging frames {last_start}-{last_end} and {current_start}-{current_end}: {merge_reason if merge_reason else 'coordinates too different'}")
                     # Keep as separate interval
                     merged_intervals.append(current_interval)
                     merged_coords.append(current_box)
             
             return merged_intervals, merged_coords
         
-        # Apply intelligent interval creation with OCR-based merging
-        cap_for_ocr = cv2.VideoCapture(temp_video_path)  # Separate video capture for OCR
-        sub_frame_no_list_continuous, distinct_coords = create_intelligent_intervals(
+        def analyze_coordinate_similarity(box1, box2):
+            """
+            Enhanced coordinate similarity analysis based on corner proximity, not just center points.
+            This is more robust to changes in box size and aligns with user feedback.
+            """
+            if not box1 or not box2:
+                return {'high_similarity': False, 'medium_similarity': False, 'y_position_match': False}
+            
+            xmin1, xmax1, ymin1, ymax1 = box1
+            xmin2, xmax2, ymin2, ymax2 = box2
+            
+            # Calculate dimensions
+            width1, height1 = xmax1 - xmin1, ymax1 - ymin1
+            width2, height2 = xmax2 - xmin2, ymax2 - ymin2
+            
+            # --- Positional Difference Analysis (Corner-based) ---
+            ymin_diff = abs(ymin1 - ymin2)
+            ymax_diff = abs(ymax1 - ymax2)
+            xmin_diff = abs(xmin1 - xmin2)
+            xmax_diff = abs(xmax1 - xmax2)
+            
+            # --- Size and Shape Analysis ---
+            area1, area2 = width1 * height1, width2 * height2
+            area_ratio = min(area1, area2) / max(area1, area2) if max(area1, area2) > 0 else 0
+            
+            # Classification criteria
+            high_similarity = (
+                ymin_diff <= 10 and ymax_diff <= 10 and  # Very close Y position
+                xmin_diff <= 25 and xmax_diff <= 25 and  # Close X position
+                area_ratio >= 0.9  # Similar size (user-tuned)
+            )
+            
+            medium_similarity = (
+                ymin_diff <= 20 and ymax_diff <= 20 and  # Moderately close Y position
+                xmin_diff <= 50 and xmax_diff <= 50 and  # Moderately close X position
+                area_ratio >= 0.75 # Somewhat similar size
+            )
+            
+            # Checks if boxes are on the same horizontal line
+            y_position_match = (ymin_diff <= 15 and ymax_diff <= 15)
+            
+            return {
+                'high_similarity': high_similarity,
+                'medium_similarity': medium_similarity, 
+                'y_position_match': y_position_match,
+                'metrics': {
+                    'ymin_diff': ymin_diff,
+                    'ymax_diff': ymax_diff,
+                    'xmin_diff': xmin_diff,
+                    'xmax_diff': xmax_diff,
+                    'area_ratio': area_ratio
+                }
+            }
+        
+        # Apply coordinate-based interval merging with optional OCR validation
+        cap_for_ocr = cv2.VideoCapture(temp_video_path)  # Separate video capture for OCR validation
+        sub_frame_no_list_continuous, distinct_coords = create_coordinate_based_intervals(
             initial_intervals, representative_boxes_dict, cap_for_ocr, ocr_recogniser, ocr_cache
         )
         cap_for_ocr.release()  # Clean up the OCR video capture
         
-        print(f"[DEBUG] After OCR-based intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
+        print(f"[DEBUG] After coordinate-based intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
 
         json_content = {
             "distinct_coordinates": distinct_coords,
