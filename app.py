@@ -174,8 +174,7 @@ async def find_subtitles(
         if not subtitle_frame_no_box_dict:
             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
 
-        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
-        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(subtitle_frame_no_box_dict)
         cap = cv2.VideoCapture(temp_video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -185,68 +184,120 @@ async def find_subtitles(
         # Filter out mistake subtitle areas by checking the fps
         correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
 
-        # Get the first entry of each subtitle area as the true subtitle
-        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
-        
-        # Create initial intervals based on identical masks
-        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
-        
-        print(f"[DEBUG] Initial intervals: {len(sub_frame_no_list_continuous)}")
-        
-        # Calculate representative bounding box for each interval
-        initial_coords = []
-        for start, end in sub_frame_no_list_continuous:
-            coords_in_interval = [
-                first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict
-            ]
-            if coords_in_interval:
-                unified_box = find_smallest_bounding_box(coords_in_interval)
-                initial_coords.append(unified_box)
-            else:
-                initial_coords.append(None)
-        
-        # Merge nearby intervals based on both gap size AND box similarity
-        merged_intervals = []
-        merged_coords = []
-        
-        if sub_frame_no_list_continuous:
-            merged_intervals.append(sub_frame_no_list_continuous[0])
-            merged_coords.append(initial_coords[0])
+        # Instead of using first_entry_dict, find the most representative subtitle area for each frame
+        def get_most_representative_box(boxes):
+            """Get the most representative subtitle box from a list of boxes."""
+            if not boxes:
+                return None
+            if len(boxes) == 1:
+                return boxes[0]
             
-            for i in range(1, len(sub_frame_no_list_continuous)):
-                last_start, last_end = merged_intervals[-1]
-                current_start, current_end = sub_frame_no_list_continuous[i]
+            # Calculate area for each box and find the largest one (likely main subtitle)
+            box_areas = []
+            for box in boxes:
+                xmin, xmax, ymin, ymax = box
+                area = (xmax - xmin) * (ymax - ymin)
+                box_areas.append((area, box))
+            
+            # Return the box with largest area
+            return max(box_areas, key=lambda x: x[0])[1]
+
+        representative_boxes_dict = {
+            frame_no: get_most_representative_box(boxes) 
+            for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() 
+            if boxes
+        }
+        
+        # Create initial intervals using the relaxed continuous ranges method
+        initial_intervals = subtitle_detect.find_continuous_ranges(representative_boxes_dict)
+        print(f"[DEBUG] Initial intervals: {len(initial_intervals)}")
+        
+        # Now create intelligent merged intervals based on subtitle similarity
+        def create_intelligent_intervals(intervals, boxes_dict):
+            """Create merged intervals based on subtitle box similarity and proximity."""
+            if not intervals:
+                return [], []
+            
+            # Calculate representative box for each interval
+            interval_data = []
+            for start, end in intervals:
+                # Get all boxes in this interval
+                interval_boxes = [
+                    boxes_dict[i] for i in range(start, end + 1) 
+                    if i in boxes_dict and boxes_dict[i] is not None
+                ]
                 
-                prev_coord = merged_coords[-1]
-                current_coord = initial_coords[i]
+                if interval_boxes:
+                    # Use the bounding box that encompasses all boxes in the interval
+                    representative_box = find_smallest_bounding_box(interval_boxes)
+                    interval_data.append(((start, end), representative_box))
+            
+            if not interval_data:
+                return [], []
+            
+            # Apply intelligent merging
+            merged_intervals = [interval_data[0][0]]
+            merged_coords = [interval_data[0][1]]
+            
+            for i in range(1, len(interval_data)):
+                current_interval, current_box = interval_data[i]
+                last_interval = merged_intervals[-1]
+                last_box = merged_coords[-1]
                 
-                # Skip if either coordinate is None
-                if prev_coord is None or current_coord is None:
-                    merged_intervals.append((current_start, current_end))
-                    merged_coords.append(current_coord)
-                    continue
+                current_start, current_end = current_interval
+                last_start, last_end = last_interval
                 
-                # Check if boxes are geometrically similar
-                boxes_are_similar = SubtitleDetect.are_similar(prev_coord, current_coord)
+                # Calculate gap between intervals
+                gap = current_start - last_end
                 
-                # Adaptive gap threshold: larger for similar boxes, smaller for dissimilar ones
-                max_gap = 10 if boxes_are_similar else 3
-                gap_is_small = (current_start - last_end) <= max_gap
+                # Check if boxes are similar using the existing similarity function
+                boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
                 
-                if gap_is_small and boxes_are_similar:
-                    # Merge intervals and create a bounding box that encompasses both
+                # Merging criteria:
+                # 1. Very small gap (1-3 frames) - likely same subtitle with minor detection gaps
+                # 2. Small gap (4-10 frames) + similar boxes - same subtitle with brief pause
+                # 3. Medium gap (11-20 frames) + very similar boxes - same subtitle with longer pause
+                should_merge = False
+                
+                if gap <= 3:
+                    should_merge = True
+                elif gap <= 10 and boxes_similar:
+                    should_merge = True
+                elif gap <= 20 and boxes_similar and last_box and current_box:
+                    # Check for very similar boxes (nearly identical positions)
+                    xmin1, xmax1, ymin1, ymax1 = last_box
+                    xmin2, xmax2, ymin2, ymax2 = current_box
+                    
+                    very_similar = (
+                        abs(xmin1 - xmin2) <= 15 and
+                        abs(xmax1 - xmax2) <= 15 and
+                        abs(ymin1 - ymin2) <= 15 and
+                        abs(ymax1 - ymax2) <= 15
+                    )
+                    
+                    if very_similar:
+                        should_merge = True
+                
+                if should_merge:
+                    # Merge with previous interval
                     merged_intervals[-1] = (last_start, current_end)
-                    merged_coords[-1] = find_smallest_bounding_box([prev_coord, current_coord])
+                    if last_box and current_box:
+                        merged_coords[-1] = find_smallest_bounding_box([last_box, current_box])
+                    else:
+                        merged_coords[-1] = last_box or current_box
                 else:
                     # Keep as separate interval
-                    merged_intervals.append((current_start, current_end))
-                    merged_coords.append(current_coord)
+                    merged_intervals.append(current_interval)
+                    merged_coords.append(current_box)
+            
+            return merged_intervals, merged_coords
         
-        print(f"[DEBUG] After merging: {len(merged_intervals)} intervals")
+        # Apply intelligent interval creation
+        sub_frame_no_list_continuous, distinct_coords = create_intelligent_intervals(
+            initial_intervals, representative_boxes_dict
+        )
         
-        # Use the merged results
-        sub_frame_no_list_continuous = merged_intervals
-        distinct_coords = merged_coords
+        print(f"[DEBUG] After intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
 
         json_content = {
             "distinct_coordinates": distinct_coords,
@@ -555,65 +606,73 @@ async def download_video(video_filename: str):
 
 def merge_intervals(intervals, distinct_coords):
     """
-    Merge intervals that have similar coordinates.
-    Returns new intervals and distinct_coords with merged similar regions.
-    Uses config.PIXEL_TOLERANCE_X and config.PIXEL_TOLERANCE_Y for similarity comparison.
+    Merge intervals using intelligent logic that considers subtitle box similarity and frame gaps.
+    This uses the same merging criteria as the find_subtitles function for consistency.
     """
     if not intervals or not distinct_coords:
         return intervals, distinct_coords
     
-    # Create a mapping of intervals to their coordinates
-    interval_coords = list(zip(intervals, distinct_coords))
+    # Sort intervals by start frame
+    sorted_pairs = sorted(zip(intervals, distinct_coords), key=lambda x: x[0][0])
     
-    # Group similar intervals
-    merged_groups = []
-    used_indices = set()
+    if not sorted_pairs:
+        return [], []
     
-    for i, (interval1, coords1) in enumerate(interval_coords):
-        if i in used_indices:
-            continue
-            
-        # Start a new group
-        current_group_indices = [i]
+    merged_intervals = [sorted_pairs[0][0]]
+    merged_coords = [sorted_pairs[0][1]]
+    
+    for i in range(1, len(sorted_pairs)):
+        current_interval, current_box = sorted_pairs[i]
+        last_interval = merged_intervals[-1]
+        last_box = merged_coords[-1]
         
-        # Find all similar intervals
-        for j, (interval2, coords2) in enumerate(interval_coords[i+1:], i+1):
-            if j in used_indices:
-                continue
-                
-            if SubtitleDetect.are_similar(coords1, coords2):
-                current_group_indices.append(j)
+        current_start, current_end = current_interval
+        last_start, last_end = last_interval
         
-        # Merge the group
-        if len(current_group_indices) > 1:
-            # Sort by start frame
-            current_group = [interval_coords[k] for k in current_group_indices]
-            current_group.sort(key=lambda x: x[0][0])
+        # Calculate gap between intervals
+        gap = current_start - last_end
+        
+        # Check if boxes are similar using the existing similarity function
+        boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
+        
+        # Use the same merging criteria as in find_subtitles:
+        # 1. Very small gap (1-3 frames) - likely same subtitle with minor detection gaps
+        # 2. Small gap (4-10 frames) + similar boxes - same subtitle with brief pause
+        # 3. Medium gap (11-20 frames) + very similar boxes - same subtitle with longer pause
+        should_merge = False
+        
+        if gap <= 3:
+            should_merge = True
+        elif gap <= 10 and boxes_similar:
+            should_merge = True
+        elif gap <= 20 and boxes_similar and last_box and current_box:
+            # Check for very similar boxes (nearly identical positions)
+            xmin1, xmax1, ymin1, ymax1 = last_box
+            xmin2, xmax2, ymin2, ymax2 = current_box
             
-            # Merge intervals
-            merged_start = current_group[0][0][0]
-            merged_end = current_group[-1][0][1]
-            merged_interval = (merged_start, merged_end)
+            very_similar = (
+                abs(xmin1 - xmin2) <= 15 and
+                abs(xmax1 - xmax2) <= 15 and
+                abs(ymin1 - ymin2) <= 15 and
+                abs(ymax1 - ymax2) <= 15
+            )
             
-            # Use the bounding box that covers all merged coordinates
-            all_coords = [item[1] for item in current_group]
-            merged_coords = find_smallest_bounding_box(all_coords)
-            
-            merged_groups.append((merged_interval, merged_coords))
-            used_indices.update(current_group_indices)
+            if very_similar:
+                should_merge = True
+        
+        if should_merge:
+            # Merge with previous interval
+            merged_intervals[-1] = (last_start, current_end)
+            if last_box and current_box:
+                merged_coords[-1] = find_smallest_bounding_box([last_box, current_box])
+            else:
+                merged_coords[-1] = last_box or current_box
         else:
-            # Single interval, keep as is
-            merged_groups.append((interval1, coords1))
-            used_indices.add(i)
+            # Keep as separate interval
+            merged_intervals.append(current_interval)
+            merged_coords.append(current_box)
     
-    # Sort by start frame
-    merged_groups.sort(key=lambda x: x[0][0])
-    
-    # Unpack results
-    new_intervals = [group[0] for group in merged_groups]
-    new_distinct_coords = [group[1] for group in merged_groups]
-    
-    return new_intervals, new_distinct_coords
+    return merged_intervals, merged_coords
 
 @app.post("/merge_similar_intervals/{task_id}", include_in_schema=False)
 async def merge_similar_intervals(task_id: str):
