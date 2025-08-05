@@ -35,7 +35,16 @@
 - [ ] Document the workflow for both users and developers.
 - [ ] Provide test cases for detection, editing, and processing.
 
-## 8. Memory & Processing Time Optimization (For Coze Plugin)
+## 8. OCR-Based Intelligent Merging (New Implementation)
+- [x] Create OCR module (backend/tools/ocr.py) with PaddleOCR integration
+- [x] Implement compare_ocr_result function for text similarity comparison using Levenshtein distance
+- [x] Add text extraction functions for subtitle content recognition
+- [x] Integrate OCR into find_subtitles interval merging logic
+- [x] Replace geometry-only merging with OCR text-based merging
+- [x] Add OCR caching to prevent repeated processing of same frames
+- [x] Update create_intelligent_intervals to use OCR text comparison
+
+## 9. Memory & Processing Time Optimization (For Coze Plugin)
 - [ ] Implement file size limits (max 50MB per video) to prevent memory overflow.
 - [ ] Add memory monitoring and warnings when approaching limits (80% of 512MB).
 - [ ] Implement chunked downloads to prevent large file downloads from blocking.

@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 from backend.main import find_smallest_bounding_box
+from backend.tools.ocr import OcrRecogniser, compare_ocr_result, extract_text_from_frame
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -186,35 +187,62 @@ async def find_subtitles(
 
         # Instead of using first_entry_dict, find the most representative subtitle area for each frame
         def get_most_representative_box(boxes):
-            """Get the most representative subtitle box from a list of boxes."""
+            """Get the most representative subtitle box from a list of boxes, with validation."""
             if not boxes:
                 return None
             if len(boxes) == 1:
-                return boxes[0]
+                box = boxes[0]
+                # Validate that this is a meaningful subtitle box
+                xmin, xmax, ymin, ymax = box
+                width = xmax - xmin
+                height = ymax - ymin
+                area = width * height
+                
+                # Filter out boxes that are too small or have wrong aspect ratio
+                # Typical subtitles should be wider than they are tall
+                if area < 500 or height > width or width < 50 or height < 15:
+                    return None
+                return box
             
-            # Calculate area for each box and find the largest one (likely main subtitle)
-            box_areas = []
+            # Calculate area for each box and find valid subtitle candidates
+            valid_boxes = []
             for box in boxes:
                 xmin, xmax, ymin, ymax = box
-                area = (xmax - xmin) * (ymax - ymin)
-                box_areas.append((area, box))
+                width = xmax - xmin
+                height = ymax - ymin
+                area = width * height
+                
+                # Filter out invalid boxes
+                if area >= 500 and height <= width and width >= 50 and height >= 15:
+                    valid_boxes.append((area, box))
             
-            # Return the box with largest area
-            return max(box_areas, key=lambda x: x[0])[1]
+            if not valid_boxes:
+                return None
+                
+            # Return the box with largest area among valid candidates
+            return max(valid_boxes, key=lambda x: x[0])[1]
 
-        representative_boxes_dict = {
-            frame_no: get_most_representative_box(boxes) 
-            for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() 
-            if boxes
-        }
+        # Get representative boxes with better validation
+        representative_boxes_dict = {}
+        for frame_no, boxes in correct_subtitle_frame_no_box_dict.items():
+            if boxes:
+                representative_box = get_most_representative_box(boxes)
+                if representative_box is not None:  # Only include frames with valid subtitle boxes
+                    representative_boxes_dict[frame_no] = representative_box
+        
+        print(f"[DEBUG] Frames with valid subtitles: {len(representative_boxes_dict)} out of {len(correct_subtitle_frame_no_box_dict)}")
+        
+        # Initialize OCR for intelligent text-based merging
+        ocr_recogniser = OcrRecogniser()
+        ocr_cache = {}
         
         # Create initial intervals using the relaxed continuous ranges method
-        initial_intervals = subtitle_detect.find_continuous_ranges(representative_boxes_dict)
+        initial_intervals = subtitle_detect.find_continuous_ranges_with_same_mask(representative_boxes_dict)
         print(f"[DEBUG] Initial intervals: {len(initial_intervals)}")
         
-        # Now create intelligent merged intervals based on subtitle similarity
-        def create_intelligent_intervals(intervals, boxes_dict):
-            """Create merged intervals based on subtitle box similarity and proximity."""
+        # Now create intelligent merged intervals based on OCR text similarity
+        def create_intelligent_intervals(intervals, boxes_dict, video_cap, ocr_recogniser, ocr_cache):
+            """Create merged intervals based on OCR text comparison from subtitle extractor logic."""
             if not intervals:
                 return [], []
             
@@ -230,19 +258,33 @@ async def find_subtitles(
                 if interval_boxes:
                     # Use the bounding box that encompasses all boxes in the interval
                     representative_box = find_smallest_bounding_box(interval_boxes)
-                    interval_data.append(((start, end), representative_box))
+                    
+                    # Validate the merged box makes sense as a subtitle
+                    xmin, xmax, ymin, ymax = representative_box
+                    width = xmax - xmin
+                    height = ymax - ymin
+                    area = width * height
+                    
+                    # Only include intervals with reasonable subtitle dimensions
+                    if area >= 500 and width >= 50 and height >= 15:
+                        # Get representative frame from middle of interval for OCR
+                        mid_frame = (start + end) // 2
+                        interval_data.append(((start, end), representative_box, mid_frame))
             
             if not interval_data:
                 return [], []
             
-            # Apply intelligent merging
+            print(f"[DEBUG] Valid interval data: {len(interval_data)}")
+            
+            # Apply OCR-based intelligent merging
             merged_intervals = [interval_data[0][0]]
             merged_coords = [interval_data[0][1]]
             
             for i in range(1, len(interval_data)):
-                current_interval, current_box = interval_data[i]
+                current_interval, current_box, current_frame = interval_data[i]
                 last_interval = merged_intervals[-1]
                 last_box = merged_coords[-1]
+                _, _, last_frame = interval_data[i-1]
                 
                 current_start, current_end = current_interval
                 last_start, last_end = last_interval
@@ -250,33 +292,51 @@ async def find_subtitles(
                 # Calculate gap between intervals
                 gap = current_start - last_end
                 
-                # Check if boxes are similar using the existing similarity function
-                boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
-                
-                # Merging criteria:
-                # 1. Very small gap (1-3 frames) - likely same subtitle with minor detection gaps
-                # 2. Small gap (4-10 frames) + similar boxes - same subtitle with brief pause
-                # 3. Medium gap (11-20 frames) + very similar boxes - same subtitle with longer pause
                 should_merge = False
                 
-                if gap <= 3:
+                # Strategy 1: Very small gaps (1-2 frames) - likely detection inconsistencies
+                if gap <= 2:
                     should_merge = True
-                elif gap <= 10 and boxes_similar:
-                    should_merge = True
-                elif gap <= 20 and boxes_similar and last_box and current_box:
-                    # Check for very similar boxes (nearly identical positions)
-                    xmin1, xmax1, ymin1, ymax1 = last_box
-                    xmin2, xmax2, ymin2, ymax2 = current_box
-                    
-                    very_similar = (
-                        abs(xmin1 - xmin2) <= 15 and
-                        abs(xmax1 - xmax2) <= 15 and
-                        abs(ymin1 - ymin2) <= 15 and
-                        abs(ymax1 - ymax2) <= 15
-                    )
-                    
-                    if very_similar:
-                        should_merge = True
+                    print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: small gap ({gap})")
+                
+                # Strategy 2: OCR text comparison for larger gaps
+                elif gap <= 20:  # Only consider OCR for reasonable gaps
+                    try:
+                        # Get frames for OCR comparison
+                        video_cap.set(cv2.CAP_PROP_POS_FRAMES, last_frame - 1)
+                        ret1, frame1 = video_cap.read()
+                        
+                        video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame - 1)
+                        ret2, frame2 = video_cap.read()
+                        
+                        if ret1 and ret2:
+                            # Crop frames to subtitle regions for more accurate OCR
+                            last_xmin, last_xmax, last_ymin, last_ymax = last_box
+                            current_xmin, current_xmax, current_ymin, current_ymax = current_box
+                            
+                            frame1_cropped = frame1[last_ymin:last_ymax, last_xmin:last_xmax]
+                            frame2_cropped = frame2[current_ymin:current_ymax, current_xmin:current_xmax]
+                            
+                            # Compare OCR results using the extractor's logic
+                            texts_similar = compare_ocr_result(
+                                ocr_recogniser, frame1_cropped, last_frame, 
+                                frame2_cropped, current_frame, ocr_cache, 
+                                threshold=0.8
+                            )
+                            
+                            if texts_similar:
+                                should_merge = True
+                                print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: similar OCR text")
+                            else:
+                                print(f"[DEBUG] NOT merging frames {last_start}-{last_end} and {current_start}-{current_end}: different OCR text")
+                        
+                    except Exception as e:
+                        print(f"[WARNING] OCR comparison failed: {e}")
+                        # Fall back to geometric similarity for this comparison
+                        boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
+                        if gap <= 5 and boxes_similar:
+                            should_merge = True
+                            print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: fallback geometric similarity")
                 
                 if should_merge:
                     # Merge with previous interval
@@ -292,12 +352,14 @@ async def find_subtitles(
             
             return merged_intervals, merged_coords
         
-        # Apply intelligent interval creation
+        # Apply intelligent interval creation with OCR-based merging
+        cap_for_ocr = cv2.VideoCapture(temp_video_path)  # Separate video capture for OCR
         sub_frame_no_list_continuous, distinct_coords = create_intelligent_intervals(
-            initial_intervals, representative_boxes_dict
+            initial_intervals, representative_boxes_dict, cap_for_ocr, ocr_recogniser, ocr_cache
         )
+        cap_for_ocr.release()  # Clean up the OCR video capture
         
-        print(f"[DEBUG] After intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
+        print(f"[DEBUG] After OCR-based intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
 
         json_content = {
             "distinct_coordinates": distinct_coords,
@@ -612,11 +674,30 @@ def merge_intervals(intervals, distinct_coords):
     if not intervals or not distinct_coords:
         return intervals, distinct_coords
     
-    # Sort intervals by start frame
-    sorted_pairs = sorted(zip(intervals, distinct_coords), key=lambda x: x[0][0])
+    # Validate that coordinates represent actual subtitles
+    def is_valid_subtitle_box(coords):
+        """Check if coordinates represent a valid subtitle box."""
+        if not coords:
+            return False
+        xmin, xmax, ymin, ymax = coords
+        width = xmax - xmin
+        height = ymax - ymin
+        area = width * height
+        
+        # Filter out invalid boxes (too small, wrong aspect ratio, etc.)
+        return area >= 500 and height <= width and width >= 50 and height >= 15
     
-    if not sorted_pairs:
+    # Filter out intervals with invalid subtitle boxes
+    valid_pairs = []
+    for interval, coords in zip(intervals, distinct_coords):
+        if is_valid_subtitle_box(coords):
+            valid_pairs.append((interval, coords))
+    
+    if not valid_pairs:
         return [], []
+    
+    # Sort intervals by start frame
+    sorted_pairs = sorted(valid_pairs, key=lambda x: x[0][0])
     
     merged_intervals = [sorted_pairs[0][0]]
     merged_coords = [sorted_pairs[0][1]]
@@ -635,29 +716,32 @@ def merge_intervals(intervals, distinct_coords):
         # Check if boxes are similar using the existing similarity function
         boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
         
-        # Use the same merging criteria as in find_subtitles:
-        # 1. Very small gap (1-3 frames) - likely same subtitle with minor detection gaps
-        # 2. Small gap (4-10 frames) + similar boxes - same subtitle with brief pause
-        # 3. Medium gap (11-20 frames) + very similar boxes - same subtitle with longer pause
+        # Use the same conservative merging criteria as in find_subtitles:
+        # 1. Very small gap (1-2 frames) - likely same subtitle with detection gaps
+        # 2. Small gap (3-5 frames) + very similar boxes - same subtitle with brief pause
+        # 3. No merging for gaps > 5 frames unless boxes are nearly identical
         should_merge = False
         
-        if gap <= 3:
+        if gap <= 2:
+            # Very small gaps are likely detection inconsistencies
             should_merge = True
-        elif gap <= 10 and boxes_similar:
+        elif gap <= 5 and boxes_similar:
+            # Small gaps with similar boxes - brief pauses in same subtitle
             should_merge = True
-        elif gap <= 20 and boxes_similar and last_box and current_box:
-            # Check for very similar boxes (nearly identical positions)
+        elif gap <= 10 and last_box and current_box:
+            # Only merge larger gaps if boxes are nearly identical (same subtitle)
             xmin1, xmax1, ymin1, ymax1 = last_box
             xmin2, xmax2, ymin2, ymax2 = current_box
             
-            very_similar = (
-                abs(xmin1 - xmin2) <= 15 and
-                abs(xmax1 - xmax2) <= 15 and
-                abs(ymin1 - ymin2) <= 15 and
-                abs(ymax1 - ymax2) <= 15
+            # Very strict similarity check
+            nearly_identical = (
+                abs(xmin1 - xmin2) <= 10 and
+                abs(xmax1 - xmax2) <= 10 and
+                abs(ymin1 - ymin2) <= 10 and
+                abs(ymax1 - ymax2) <= 10
             )
             
-            if very_similar:
+            if nearly_identical:
                 should_merge = True
         
         if should_merge:
