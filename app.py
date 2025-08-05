@@ -465,6 +465,39 @@ async def find_subtitles(
         
         print(f"[DEBUG] After coordinate-based intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
 
+        # --- Final Interval Processing for Inpainting Context ---
+        # This step, inspired by the STTN workflow, expands intervals to ensure the inpainting
+        # model has enough context, which also helps close small gaps between subtitle segments.
+        final_intervals = subtitle_detect.expand_and_merge_intervals(sub_frame_no_list_continuous)
+        
+        if len(final_intervals) != len(sub_frame_no_list_continuous):
+            print(f"[DEBUG] After expanding for inpainting context: {len(final_intervals)} intervals")
+
+            # Recalculate bounding boxes for the newly merged intervals
+            final_coords = []
+            for start, end in final_intervals:
+                # Find all original boxes that fall within the new, expanded interval
+                boxes_in_merged_interval = []
+                for i, (orig_start, orig_end) in enumerate(sub_frame_no_list_continuous):
+                    if max(start, orig_start) <= min(end, orig_end):  # Check for overlap
+                        if distinct_coords[i]:
+                            boxes_in_merged_interval.append(distinct_coords[i])
+                
+                if boxes_in_merged_interval:
+                    final_coords.append(find_smallest_bounding_box(boxes_in_merged_interval))
+                else:
+                    # Fallback for rare cases where no original box is found
+                    fallback_boxes = [representative_boxes_dict.get(i) for i in range(start, end + 1) if representative_boxes_dict.get(i)]
+                    if fallback_boxes:
+                        final_coords.append(find_smallest_bounding_box(fallback_boxes))
+                    else:
+                        final_coords.append(None)
+            
+            # Update the main variables with the post-processed results
+            sub_frame_no_list_continuous = final_intervals
+            distinct_coords = final_coords
+        # ---------------------------------------------------------
+
         json_content = {
             "distinct_coordinates": distinct_coords,
             "frame_intervals": sub_frame_no_list_continuous
