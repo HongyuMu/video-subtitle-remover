@@ -21,25 +21,9 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 from backend.main import find_smallest_bounding_box
-from backend.tools.ocr import OcrRecogniser, compare_ocr_result
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-
-# --- Global Model Management ---
-class ModelManager:
-    subtitle_detector = None
-    ocr_recogniser = None
-
-@app.on_event("startup")
-async def load_models():
-    """Load deep learning models on application startup."""
-    print("Loading models into memory...")
-    ModelManager.subtitle_detector = SubtitleDetect(video_path=None) # Initialized without a video
-    ModelManager.ocr_recogniser = OcrRecogniser()
-    print("Models loaded successfully.")
-
-# ---------------------------------
 
 @app.get("/")
 async def root():
@@ -53,8 +37,8 @@ PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 
 TASK_RESULTS = {}
 
-def check_memory_usage(return_stats=False):
-    """Check current memory usage and warn if approaching limits. Can also return stats."""
+def check_memory_usage():
+    """Check current memory usage and warn if approaching limits"""
     try:
         process = psutil.Process()
         memory_info = process.memory_info()
@@ -65,12 +49,6 @@ def check_memory_usage(return_stats=False):
         memory_percentage = (memory_mb / memory_limit_mb) * 100
         
         print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
-
-        if return_stats:
-            return {
-                "memory_mb": round(memory_mb, 1),
-                "memory_percentage": round(memory_percentage, 1)
-            }
         
         if memory_percentage > 80:
             print(f"WARNING: Memory usage at {memory_percentage:.1f}%")
@@ -78,8 +56,6 @@ def check_memory_usage(return_stats=False):
         return True
     except Exception:
         # If psutil not available, continue
-        if return_stats:
-            return {"memory_mb": -1, "memory_percentage": -1}
         return True
 
 def cleanup_tasks(user_id: Optional[str] = None, all_old: bool = False):
@@ -125,21 +101,13 @@ class CleanupRequest(BaseModel):
 @app.post("/cleanup")
 async def manual_cleanup(request: CleanupRequest):
     """
-    Manually triggers cleanup for a specific user's tasks and reports memory usage.
+    Manually triggers cleanup for a specific user's tasks.
     """
     cleaned_count = cleanup_tasks(user_id=request.user_id)
-    memory_after_cleanup = check_memory_usage(return_stats=True)
-    
     if cleaned_count > 0:
-        return {
-            "message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}.",
-            "memory_after_cleanup": memory_after_cleanup
-        }
+        return {"message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}."}
     else:
-        return {
-            "message": f"No tasks found to clean up for user {request.user_id}.",
-            "memory_after_cleanup": memory_after_cleanup
-        }
+        return {"message": f"No tasks found to clean up for user {request.user_id}."}
 
 
 def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
@@ -171,19 +139,15 @@ async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
                     f.write(chunk)
 
 # Call the SubtitleDetect class functions to find subtitles
-@app.post("/debug_raw_detection/")
-async def debug_raw_detection(
+@app.post("/find_subtitles/")
+async def find_subtitles(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = None,
     cloud_ref: Optional[str] = None,
     user_id: Optional[str] = None):
-    """
-    DEBUG ENDPOINT: Shows raw output from find_subtitle_frame_no without any post-processing.
-    This helps debug what the core detection function actually finds.
-    """
     # Use the original filename (without extension) for the output JSON
-    original_name = Path(file.filename).stem if file else "debug_raw"
+    original_name = Path(file.filename).stem if file else "unknown"
     temp_video_path = None
 
     if user_id is None:
@@ -193,6 +157,7 @@ async def debug_raw_detection(
         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
         await download_file(url, temp_video_path)
     elif cloud_ref:
+        # Assuming cloud_ref is a URL or a cloud storage path
         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
         await download_file(cloud_ref, temp_video_path)
     else:
@@ -203,407 +168,83 @@ async def debug_raw_detection(
         if not check_memory_usage():
             raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
         
-        # Use the global subtitle detector and update its video path
-        subtitle_detect = ModelManager.subtitle_detector
-        subtitle_detect.video_path = temp_video_path
-        
-        # *** THIS IS THE RAW OUTPUT FROM find_subtitle_frame_no ***
-        raw_subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
-        
-        if not raw_subtitle_frame_no_box_dict:
+        # Detect subtitle locations and intervals
+        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
+        if not subtitle_frame_no_box_dict:
             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
 
+        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
         cap = cv2.VideoCapture(temp_video_path)
         fps = cap.get(cv2.CAP_PROP_FPS)
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         cap.release()
 
-        print(f"[DEBUG] Raw detection found subtitles in {len(raw_subtitle_frame_no_box_dict)} frames")
-        
-        # Create simple intervals directly from the raw detection (no merging at all)
-        simple_intervals = []
-        simple_coords = []
-        
-        # Convert frame-by-frame detections to intervals
-        frame_numbers = sorted(raw_subtitle_frame_no_box_dict.keys())
-        for frame_no in frame_numbers:
-            boxes = raw_subtitle_frame_no_box_dict[frame_no]
-            if boxes:
-                # For debugging, just take the first box from each frame
-                first_box = boxes[0]
-                simple_intervals.append((frame_no, frame_no))  # Single frame intervals
-                simple_coords.append(first_box)
-        
-        print(f"[DEBUG] Created {len(simple_intervals)} single-frame intervals from raw detection")
+        # Filter out mistake subtitle areas by checking the fps
+        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
 
-        json_content = {
-            "distinct_coordinates": simple_coords,
-            "frame_intervals": simple_intervals,
-            "debug_info": {
-                "raw_frames_with_subtitles": len(raw_subtitle_frame_no_box_dict),
-                "total_boxes_found": sum(len(boxes) for boxes in raw_subtitle_frame_no_box_dict.values()),
-                "frame_numbers": frame_numbers[:20],  # First 20 frame numbers for inspection
-                "sample_boxes": [raw_subtitle_frame_no_box_dict[frame_numbers[i]] for i in range(min(5, len(frame_numbers)))]
-            }
-        }
+        # Get the first entry of each subtitle area as the true subtitle
+        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
         
-        # Save debug output
-        json_file_path = PROCESSED_FILES_DIR / f"{original_name}_debug_raw.json"
+        # Merge nearby intervals to reduce manual work for users
+        merged_intervals = []
+        if sub_frame_no_list_continuous:
+            merged_intervals.append(sub_frame_no_list_continuous[0])
+            for i in range(1, len(sub_frame_no_list_continuous)):
+                last_start, last_end = merged_intervals[-1]
+                current_start, current_end = sub_frame_no_list_continuous[i]
+                
+                # If the gap is small and boxes are similar, merge them
+                if (current_start - last_end <= 3): # Merge if gap is smaller than 3 frames
+                    # Extend the previous interval
+                    merged_intervals[-1] = (last_start, current_end)
+                else:
+                    merged_intervals.append((current_start, current_end))
+        sub_frame_no_list_continuous = merged_intervals
+
+        distinct_coords = []
+        for start, end in sub_frame_no_list_continuous:
+            coords_in_interval = [
+                first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict
+            ]
+            if coords_in_interval:
+                unified_box = find_smallest_bounding_box(coords_in_interval)
+                distinct_coords.append(unified_box)
+            else:
+                distinct_coords.append(None) # Should not happen, but as a fallback
+        
+        json_content = {
+            "distinct_coordinates": distinct_coords,
+            "frame_intervals": sub_frame_no_list_continuous
+        }
+        # Save as original_filename_sub.json
+        json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
         with open(json_file_path, "w") as json_file:
             json.dump(json_content, json_file, indent=4)
 
-        # Store results for editor
+        # Store results
         task_id = str(uuid.uuid4())
-        editor_url = str(request.url_for('get_editor', task_id=task_id)) + "?debug=true"
+        editor_url = str(request.url_for('get_editor', task_id=task_id))
         TASK_RESULTS[task_id] = {
-            "distinct_coords": simple_coords,
-            "frame_intervals": simple_intervals,
-            "original_filename": f"{original_name}_debug_raw",
+            "distinct_coords": distinct_coords,
+            "frame_intervals": sub_frame_no_list_continuous,
+            "original_filename": original_name,
             "video_path": temp_video_path,
             "video_width": video_width,
             "video_height": video_height,
             "timestamp": time.time(),
             "user_id": user_id,
-            "debug_info": json_content["debug_info"]  # Store debug info in task results
         }
-        return {
-            "task_id": task_id, 
-            "user_id": user_id, 
-            "editor_url": editor_url,
-            "debug_info": json_content["debug_info"]
-        }
+        return {"task_id": task_id, "user_id": user_id, "editor_url": editor_url}
 
     except Exception as e:
-        print("Error in debug_raw_detection: ", e)
+        print("Error in find_subtitles: ", e)
         if temp_video_path and os.path.exists(temp_video_path):
             os.remove(temp_video_path)
         raise e
-
-
-# @app.post("/find_subtitles/")
-# async def find_subtitles(
-#     request: Request,
-#     file: Optional[UploadFile] = File(None),
-#     url: Optional[str] = None,
-#     cloud_ref: Optional[str] = None,
-#     user_id: Optional[str] = None):
-#     # Use the original filename (without extension) for the output JSON
-#     original_name = Path(file.filename).stem if file else "unknown"
-#     temp_video_path = None
-
-#     if user_id is None:
-#         user_id = str(uuid.uuid4())
-
-#     if url:
-#         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-#         await download_file(url, temp_video_path)
-#     elif cloud_ref:
-#         # Assuming cloud_ref is a URL or a cloud storage path
-#         temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-#         await download_file(cloud_ref, temp_video_path)
-#     else:
-#         temp_video_path = save_temp_file(file)
-
-#     try:
-#         # Check memory before processing
-#         if not check_memory_usage():
-#             raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
-        
-#         # Use the global subtitle detector and update its video path
-#         subtitle_detect = ModelManager.subtitle_detector
-#         subtitle_detect.video_path = temp_video_path
-        
-#         subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
-#         if not subtitle_frame_no_box_dict:
-#             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
-
-#         complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(subtitle_frame_no_box_dict)
-#         cap = cv2.VideoCapture(temp_video_path)
-#         fps = cap.get(cv2.CAP_PROP_FPS)
-#         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-#         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-#         cap.release()
-
-#         # Filter out mistake subtitle areas by checking the fps
-#         correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
-
-#         # Instead of using first_entry_dict, find the most representative subtitle area for each frame
-#         def get_most_representative_box(boxes):
-#             """Get the most representative subtitle box from a list of boxes, with validation."""
-#             if not boxes:
-#                 return None
-#             if len(boxes) == 1:
-#                 box = boxes[0]
-#                 # Validate that this is a meaningful subtitle box
-#                 xmin, xmax, ymin, ymax = box
-#                 width = xmax - xmin
-#                 height = ymax - ymin
-#                 area = width * height
-                
-#                 # Filter out boxes that are too small or have wrong aspect ratio
-#                 # Typical subtitles should be wider than they are tall
-#                 if area < 500 or height > width or width < 50 or height < 15:
-#                     return None
-#                 return box
-            
-#             # Calculate area for each box and find valid subtitle candidates
-#             valid_boxes = []
-#             for box in boxes:
-#                 xmin, xmax, ymin, ymax = box
-#                 width = xmax - xmin
-#                 height = ymax - ymin
-#                 area = width * height
-                
-#                 # Filter out invalid boxes
-#                 if area >= 500 and height <= width and width >= 50 and height >= 15:
-#                     valid_boxes.append((area, box))
-            
-#             if not valid_boxes:
-#                 return None
-                
-#             # Return the box with largest area among valid candidates
-#             return max(valid_boxes, key=lambda x: x[0])[1]
-
-#         # Get representative boxes with better validation
-#         representative_boxes_dict = {}
-#         for frame_no, boxes in correct_subtitle_frame_no_box_dict.items():
-#             if boxes:
-#                 representative_box = get_most_representative_box(boxes)
-#                 if representative_box is not None:  # Only include frames with valid subtitle boxes
-#                     representative_boxes_dict[frame_no] = representative_box
-        
-#         print(f"[DEBUG] Frames with valid subtitles: {len(representative_boxes_dict)} out of {len(correct_subtitle_frame_no_box_dict)}")
-        
-#         # Use the global OCR recogniser
-#         ocr_recogniser = ModelManager.ocr_recogniser
-#         ocr_cache = {}
-        
-#         # Create initial intervals using the relaxed continuous ranges method
-#         initial_intervals = subtitle_detect.find_continuous_ranges_with_same_mask(representative_boxes_dict)
-#         print(f"[DEBUG] Initial intervals: {len(initial_intervals)}")
-        
-#         # Now create intelligent merged intervals based on coordinate similarity with OCR validation
-#         def create_coordinate_based_intervals(intervals, boxes_dict, video_cap, ocr_recogniser, ocr_cache):
-#             """Create merged intervals based primarily on coordinate similarity, with optional OCR validation."""
-#             if not intervals:
-#                 return [], []
-            
-#             # Calculate representative box for each interval
-#             interval_data = []
-#             for start, end in intervals:
-#                 # Get all boxes in this interval
-#                 interval_boxes = [
-#                     boxes_dict[i] for i in range(start, end + 1) 
-#                     if i in boxes_dict and boxes_dict[i] is not None
-#                 ]
-                
-#                 if interval_boxes:
-#                     # Use the bounding box that encompasses all boxes in the interval
-#                     representative_box = find_smallest_bounding_box(interval_boxes)
-                    
-#                     # Validate the merged box makes sense as a subtitle
-#                     xmin, xmax, ymin, ymax = representative_box
-#                     width = xmax - xmin
-#                     height = ymax - ymin
-#                     area = width * height
-                    
-#                     # Only include intervals with reasonable subtitle dimensions
-#                     if area >= 500 and width >= 50 and height >= 15:
-#                         # Get representative frame from middle of interval for OCR
-#                         mid_frame = (start + end) // 2
-#                         interval_data.append(((start, end), representative_box, mid_frame))
-            
-#             if not interval_data:
-#                 return [], []
-            
-#             print(f"[DEBUG] Valid interval data: {len(interval_data)}")
-            
-#             # Apply coordinate-based intelligent merging with OCR validation
-#             merged_intervals = [interval_data[0][0]]
-#             merged_coords = [interval_data[0][1]]
-            
-#             for i in range(1, len(interval_data)):
-#                 current_interval, current_box, current_frame = interval_data[i]
-#                 last_interval = merged_intervals[-1]
-#                 last_box = merged_coords[-1]
-#                 _, _, last_frame = interval_data[i-1]
-                
-#                 current_start, current_end = current_interval
-#                 last_start, last_end = last_interval
-                
-#                 # Calculate gap between intervals
-#                 gap = current_start - last_end
-                
-#                 should_merge = False
-#                 merge_reason = ""
-                
-#                 # Strategy 1: Very small gaps (1-2 frames) - always merge (detection jitter)
-#                 if gap <= 2:
-#                     should_merge = True
-#                     merge_reason = f"small gap ({gap})"
-                
-#                 # Strategy 2: Coordinate-based similarity analysis
-#                 elif gap <= 20:  # Only consider merging for reasonable gaps
-#                     # Check coordinate similarity using enhanced geometric analysis
-#                     coords_similar = analyze_coordinate_similarity(last_box, current_box)
-                    
-#                     if coords_similar['high_similarity']:
-#                         should_merge = True
-#                         merge_reason = f"high coordinate similarity (gap={gap})"
-#                     elif coords_similar['medium_similarity'] and gap <= 10:
-#                         should_merge = True
-#                         merge_reason = f"medium coordinate similarity (gap={gap})"
-#                     elif coords_similar['y_position_match'] and gap <= 5:
-#                         # Same Y-position (horizontal subtitle line) with small gap
-#                         should_merge = True  
-#                         merge_reason = f"same Y-position (gap={gap})"
-#                     elif coords_similar['medium_similarity'] and gap <= 15:
-#                         # For medium similarity with larger gaps, use OCR as validation
-#                         try:
-#                             # Get frames for OCR validation
-#                             video_cap.set(cv2.CAP_PROP_POS_FRAMES, last_frame - 1)
-#                             ret1, frame1 = video_cap.read()
-                            
-#                             video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame - 1)
-#                             ret2, frame2 = video_cap.read()
-                            
-#                             if ret1 and ret2:
-#                                 # Crop frames to subtitle regions
-#                                 last_xmin, last_xmax, last_ymin, last_ymax = last_box
-#                                 current_xmin, current_xmax, current_ymin, current_ymax = current_box
-                                
-#                                 frame1_cropped = frame1[last_ymin:last_ymax, last_xmin:last_xmax]
-#                                 frame2_cropped = frame2[current_ymin:current_ymax, current_xmin:current_xmax]
-                                
-#                                 # Use OCR to validate the coordinate-based decision
-#                                 texts_similar = compare_ocr_result(
-#                                     ocr_recogniser, frame1_cropped, last_frame, 
-#                                     frame2_cropped, current_frame, ocr_cache, 
-#                                     threshold=0.75  # Slightly lower threshold since coordinates are already similar
-#                                 )
-                                
-#                                 if texts_similar:
-#                                     should_merge = True
-#                                     merge_reason = f"medium coordinate similarity + OCR validation (gap={gap})"
-#                                 else:
-#                                     merge_reason = f"medium coordinate similarity but different OCR text (gap={gap})"
-                            
-#                         except Exception as e:
-#                             print(f"[WARNING] OCR validation failed: {e}")
-#                             # Without OCR validation, be more conservative
-#                             if coords_similar['high_similarity']:
-#                                 should_merge = True
-#                                 merge_reason = f"high coordinate similarity without OCR (gap={gap})"
-                
-#                 if should_merge:
-#                     print(f"[DEBUG] Merging frames {last_start}-{last_end} and {current_start}-{current_end}: {merge_reason}")
-#                     # Merge with previous interval
-#                     merged_intervals[-1] = (last_start, current_end)
-#                     if last_box and current_box:
-#                         merged_coords[-1] = find_smallest_bounding_box([last_box, current_box])
-#                     else:
-#                         merged_coords[-1] = last_box or current_box
-#                 else:
-#                     print(f"[DEBUG] NOT merging frames {last_start}-{last_end} and {current_start}-{current_end}: {merge_reason if merge_reason else 'coordinates too different'}")
-#                     # Keep as separate interval
-#                     merged_intervals.append(current_interval)
-#                     merged_coords.append(current_box)
-            
-#             return merged_intervals, merged_coords
-        
-#         def analyze_coordinate_similarity(box1, box2):
-#             """
-#             Enhanced coordinate similarity analysis based on corner proximity, not just center points.
-#             This is more robust to changes in box size and aligns with user feedback.
-#             """
-#             if not box1 or not box2:
-#                 return {'high_similarity': False, 'medium_similarity': False, 'y_position_match': False}
-            
-#             xmin1, xmax1, ymin1, ymax1 = box1
-#             xmin2, xmax2, ymin2, ymax2 = box2
-            
-#             # Calculate dimensions
-#             width1, height1 = xmax1 - xmin1, ymax1 - ymin1
-#             width2, height2 = xmax2 - xmin2, ymax2 - ymin2
-            
-#             # --- Positional Difference Analysis (Corner-based) ---
-#             ymin_diff = abs(ymin1 - ymin2)
-#             ymax_diff = abs(ymax1 - ymax2)
-#             xmin_diff = abs(xmin1 - xmin2)
-#             xmax_diff = abs(xmax1 - xmax2)
-            
-#             # --- Size and Shape Analysis ---
-#             area1, area2 = width1 * height1, width2 * height2
-#             area_ratio = min(area1, area2) / max(area1, area2) if max(area1, area2) > 0 else 0
-            
-#             # Classification criteria
-#             high_similarity = (
-#                 ymin_diff <= 10 and ymax_diff <= 10 and  # Very close Y position
-#                 xmin_diff <= 25 and xmax_diff <= 25 and  # Close X position
-#                 area_ratio >= 0.9  # Similar size (user-tuned)
-#             )
-            
-#             medium_similarity = (
-#                 ymin_diff <= 20 and ymax_diff <= 20 and  # Moderately close Y position
-#                 xmin_diff <= 50 and xmax_diff <= 50 and  # Moderately close X position
-#                 area_ratio >= 0.75 # Somewhat similar size
-#             )
-            
-#             # Checks if boxes are on the same horizontal line
-#             y_position_match = (ymin_diff <= 15 and ymax_diff <= 15)
-            
-#             return {
-#                 'high_similarity': high_similarity,
-#                 'medium_similarity': medium_similarity, 
-#                 'y_position_match': y_position_match,
-#                 'metrics': {
-#                     'ymin_diff': ymin_diff,
-#                     'ymax_diff': ymax_diff,
-#                     'xmin_diff': xmin_diff,
-#                     'xmax_diff': xmax_diff,
-#                     'area_ratio': area_ratio
-#                 }
-#             }
-        
-#         # Apply coordinate-based interval merging with optional OCR validation
-#         cap_for_ocr = cv2.VideoCapture(temp_video_path)  # Separate video capture for OCR validation
-#         sub_frame_no_list_continuous, distinct_coords = create_coordinate_based_intervals(
-#             initial_intervals, representative_boxes_dict, cap_for_ocr, ocr_recogniser, ocr_cache
-#         )
-#         cap_for_ocr.release()  # Clean up the OCR video capture
-        
-#         print(f"[DEBUG] After coordinate-based intelligent merging: {len(sub_frame_no_list_continuous)} intervals")
-
-#         json_content = {
-#             "distinct_coordinates": distinct_coords,
-#             "frame_intervals": sub_frame_no_list_continuous
-#         }
-#         # Save as original_filename_sub.json
-#         json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
-#         with open(json_file_path, "w") as json_file:
-#             json.dump(json_content, json_file, indent=4)
-
-#         # Store results
-#         task_id = str(uuid.uuid4())
-#         editor_url = str(request.url_for('get_editor', task_id=task_id))
-#         TASK_RESULTS[task_id] = {
-#             "distinct_coords": distinct_coords,
-#             "frame_intervals": sub_frame_no_list_continuous,
-#             "original_filename": original_name,
-#             "video_path": temp_video_path,
-#             "video_width": video_width,
-#             "video_height": video_height,
-#             "timestamp": time.time(),
-#             "user_id": user_id,
-#         }
-#         return {"task_id": task_id, "user_id": user_id, "editor_url": editor_url}
-
-#     except Exception as e:
-#         print("Error in find_subtitles: ", e)
-#         if temp_video_path and os.path.exists(temp_video_path):
-#             os.remove(temp_video_path)
-#         raise e
 
 
 @app.get("/subtitle_intervals/{task_id}", include_in_schema=False)
@@ -802,21 +443,6 @@ async def get_task_info(task_id: str):
         "user_id": result.get("user_id")
     }
 
-@app.get("/task_debug_info/{task_id}", include_in_schema=False)
-async def get_task_debug_info(task_id: str):
-    """
-    Returns debug information for a given task if available.
-    """
-    result = TASK_RESULTS.get(task_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    debug_info = result.get("debug_info")
-    if not debug_info:
-        raise HTTPException(status_code=404, detail="Debug information not available for this task")
-    
-    return {"debug_info": debug_info}
-
 # 
 @app.post("/process_task/{task_id}", include_in_schema=False)
 async def process_task(task_id: str, background_tasks: BackgroundTasks):
@@ -897,95 +523,65 @@ async def download_video(video_filename: str):
 
 def merge_intervals(intervals, distinct_coords):
     """
-    Merge intervals using intelligent logic that considers subtitle box similarity and frame gaps.
-    This uses the same merging criteria as the find_subtitles function for consistency.
+    Merge intervals that have similar coordinates.
+    Returns new intervals and distinct_coords with merged similar regions.
+    Uses config.PIXEL_TOLERANCE_X and config.PIXEL_TOLERANCE_Y for similarity comparison.
     """
     if not intervals or not distinct_coords:
         return intervals, distinct_coords
     
-    # Validate that coordinates represent actual subtitles
-    def is_valid_subtitle_box(coords):
-        """Check if coordinates represent a valid subtitle box."""
-        if not coords:
-            return False
-        xmin, xmax, ymin, ymax = coords
-        width = xmax - xmin
-        height = ymax - ymin
-        area = width * height
-        
-        # Filter out invalid boxes (too small, wrong aspect ratio, etc.)
-        return area >= 500 and height <= width and width >= 50 and height >= 15
+    # Create a mapping of intervals to their coordinates
+    interval_coords = list(zip(intervals, distinct_coords))
     
-    # Filter out intervals with invalid subtitle boxes
-    valid_pairs = []
-    for interval, coords in zip(intervals, distinct_coords):
-        if is_valid_subtitle_box(coords):
-            valid_pairs.append((interval, coords))
+    # Group similar intervals
+    merged_groups = []
+    used_indices = set()
     
-    if not valid_pairs:
-        return [], []
-    
-    # Sort intervals by start frame
-    sorted_pairs = sorted(valid_pairs, key=lambda x: x[0][0])
-    
-    merged_intervals = [sorted_pairs[0][0]]
-    merged_coords = [sorted_pairs[0][1]]
-    
-    for i in range(1, len(sorted_pairs)):
-        current_interval, current_box = sorted_pairs[i]
-        last_interval = merged_intervals[-1]
-        last_box = merged_coords[-1]
-        
-        current_start, current_end = current_interval
-        last_start, last_end = last_interval
-        
-        # Calculate gap between intervals
-        gap = current_start - last_end
-        
-        # Check if boxes are similar using the existing similarity function
-        boxes_similar = SubtitleDetect.are_similar(last_box, current_box) if last_box and current_box else False
-        
-        # Use the same conservative merging criteria as in find_subtitles:
-        # 1. Very small gap (1-2 frames) - likely same subtitle with detection gaps
-        # 2. Small gap (3-5 frames) + very similar boxes - same subtitle with brief pause
-        # 3. No merging for gaps > 5 frames unless boxes are nearly identical
-        should_merge = False
-        
-        if gap <= 2:
-            # Very small gaps are likely detection inconsistencies
-            should_merge = True
-        elif gap <= 5 and boxes_similar:
-            # Small gaps with similar boxes - brief pauses in same subtitle
-            should_merge = True
-        elif gap <= 10 and last_box and current_box:
-            # Only merge larger gaps if boxes are nearly identical (same subtitle)
-            xmin1, xmax1, ymin1, ymax1 = last_box
-            xmin2, xmax2, ymin2, ymax2 = current_box
+    for i, (interval1, coords1) in enumerate(interval_coords):
+        if i in used_indices:
+            continue
             
-            # Very strict similarity check
-            nearly_identical = (
-                abs(xmin1 - xmin2) <= 10 and
-                abs(xmax1 - xmax2) <= 10 and
-                abs(ymin1 - ymin2) <= 10 and
-                abs(ymax1 - ymax2) <= 10
-            )
-            
-            if nearly_identical:
-                should_merge = True
+        # Start a new group
+        current_group_indices = [i]
         
-        if should_merge:
-            # Merge with previous interval
-            merged_intervals[-1] = (last_start, current_end)
-            if last_box and current_box:
-                merged_coords[-1] = find_smallest_bounding_box([last_box, current_box])
-            else:
-                merged_coords[-1] = last_box or current_box
+        # Find all similar intervals
+        for j, (interval2, coords2) in enumerate(interval_coords[i+1:], i+1):
+            if j in used_indices:
+                continue
+                
+            if SubtitleDetect.are_similar(coords1, coords2):
+                current_group_indices.append(j)
+        
+        # Merge the group
+        if len(current_group_indices) > 1:
+            # Sort by start frame
+            current_group = [interval_coords[k] for k in current_group_indices]
+            current_group.sort(key=lambda x: x[0][0])
+            
+            # Merge intervals
+            merged_start = current_group[0][0][0]
+            merged_end = current_group[-1][0][1]
+            merged_interval = (merged_start, merged_end)
+            
+            # Use the bounding box that covers all merged coordinates
+            all_coords = [item[1] for item in current_group]
+            merged_coords = find_smallest_bounding_box(all_coords)
+            
+            merged_groups.append((merged_interval, merged_coords))
+            used_indices.update(current_group_indices)
         else:
-            # Keep as separate interval
-            merged_intervals.append(current_interval)
-            merged_coords.append(current_box)
+            # Single interval, keep as is
+            merged_groups.append((interval1, coords1))
+            used_indices.add(i)
     
-    return merged_intervals, merged_coords
+    # Sort by start frame
+    merged_groups.sort(key=lambda x: x[0][0])
+    
+    # Unpack results
+    new_intervals = [group[0] for group in merged_groups]
+    new_distinct_coords = [group[1] for group in merged_groups]
+    
+    return new_intervals, new_distinct_coords
 
 @app.post("/merge_similar_intervals/{task_id}", include_in_schema=False)
 async def merge_similar_intervals(task_id: str):
