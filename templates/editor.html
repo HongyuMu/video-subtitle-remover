@@ -43,13 +43,28 @@
             max-width: 800px;
             flex-grow: 1;
             min-width: 300px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        #video-player {
+            width: 100%;
+            display: block;
         }
         #preview-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
-            height: auto;
-            border-radius: 8px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            background-color: #e9ecef;
+            height: 100%;
+            pointer-events: none;
+        }
+        .timeline-container {
+            width: 100%;
+            padding: 10px 0;
+        }
+        #timeline-slider {
+            width: 100%;
         }
         .controls {
             background-color: var(--editor-bg-color);
@@ -117,9 +132,14 @@
         </div>
         <div class="editor-main">
             <div class="preview-container">
+                <video id="video-player" controls></video>
                 <canvas id="preview-canvas"></canvas>
             </div>
             <div class="controls">
+                <div class="timeline-container">
+                    <label for="timeline-slider">Timeline:</label>
+                    <input type="range" id="timeline-slider" value="0" step="1">
+                </div>
                 <div class="instructions">
                     <p><b>How to adjust:</b></p>
                     <ul>
@@ -188,6 +208,8 @@
         let currentImage = new Image(); // An image object to hold the current raw video frame
 
         // Get references to all the HTML elements we will interact with
+        const video = document.getElementById('video-player');
+        const timeline = document.getElementById('timeline-slider');
         const canvas = document.getElementById('preview-canvas');
         const ctx = canvas.getContext('2d');
         const intervalInfo = document.getElementById('interval-info');
@@ -213,45 +235,56 @@
         const notSubBtn = document.getElementById('not-sub-btn');
 
         // This is the main function that runs when the page loads.
-        // It fetches all necessary data from the server to set up the editor.
         async function initializeEditor() {
             try {
-                // Fetch both the interval data and the video metadata at the same time.
                 const [intervalsResponse, infoResponse] = await Promise.all([
-                    fetch(`/subtitle_intervals/${taskId}`), // Gets all subtitle boxes and frame ranges
-                    fetch(`/task_info/${taskId}`)         // Gets video width and height for sliders
+                    fetch(`/subtitle_intervals/${taskId}`),
+                    fetch(`/task_info/${taskId}`)
                 ]);
                 const intervalsData = await intervalsResponse.json();
                 const infoData = await infoResponse.json();
                 
-                // Store the fetched data in our global variables
                 intervals = intervalsData.intervals;
-                originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals)); // Deep copy for reset
+                originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
                 taskInfo = infoData;
                 
-                // Set the initial step value for all sliders
                 updateSliderSteps();
+                
+                // Setup video player
+                video.src = `/stream_video/${taskId}`;
+                video.onloadedmetadata = () => {
+                    taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
+                    timeline.max = Math.floor(video.duration * taskInfo.fps);
+                    loadInterval(0);
+                    requestAnimationFrame(drawLoop);
+                };
 
-                // Load the first interval into the editor UI
-                await loadInterval(currentIntervalIdx);
             } catch (error) {
                 console.error("Failed to initialize editor:", error);
                 intervalInfo.textContent = "Error loading task. Please try again.";
             }
         }
 
+        function getCurrentFrame() {
+            return Math.floor(video.currentTime * taskInfo.fps);
+        }
+
+        function findActiveInterval(frame) {
+            return intervals.findIndex(i => frame >= i.frame_range[0] && frame <= i.frame_range[1]);
+        }
+
         // --- CORE EDITOR LOGIC ---
-
-        // This function updates the entire UI for a specific subtitle interval.
-        async function loadInterval(idx) {
-            // FIX: Cancel any pending save from the previous interval to prevent race conditions.
+        function loadInterval(idx, fromTimeline = false) {
             clearTimeout(debounceTimer);
-
             currentIntervalIdx = idx;
             const interval = intervals[idx];
+
+            if (!fromTimeline) {
+                video.currentTime = interval.frame_range[0] / taskInfo.fps;
+            }
+
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
             
-            // Convert the server's [xmin, xmax, ymin, ymax] format to the UI's {x, y, width, height} format
             const [xmin, xmax, ymin, ymax] = interval.coords;
             const currentBox = {
                 x: xmin,
@@ -260,24 +293,15 @@
                 height: ymax - ymin
             };
 
-            // Set up the sliders with the correct max values and current positions
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            // Fetch the raw video frame and then draw the correct box on top
-            await loadFrameImage(interval.frame_range[0], currentBox);
-
-            // Enable/disable the navigation and "Use Previous" buttons appropriately
             prevBtn.disabled = currentIntervalIdx === 0;
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
             useLastBtn.disabled = currentIntervalIdx === 0;
-
-            // Only allow merging when on the last interval
-            mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
-            mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
+            mergeBtn.disabled = false; // Always enabled
         }
-
-        // Sets the maximum value of the sliders based on the video's dimensions
+        
         function updateSliderRanges() {
             sliders.x.max = taskInfo.video_width;
             sliders.y.max = taskInfo.video_height;
@@ -285,73 +309,64 @@
             sliders.height.max = taskInfo.video_height;
         }
         
-        // Sets the current value (position) of the sliders and updates the text display next to them
         function updateSliderValues(box) {
             for (const key in sliders) {
                 sliders[key].value = box[key];
-                values[key].value = box[key]; // Update number input as well
+                values[key].value = box[key];
             }
         }
 
         // --- RENDERING AND PREVIEW ---
+        function drawLoop() {
+            if (!video.paused && !video.ended) {
+                 // Match canvas size to video element size for correct scaling
+                canvas.width = video.clientWidth;
+                canvas.height = video.clientHeight;
 
-        // Fetches a single, clean video frame from the server (with no box drawn on it).
-        async function loadFrameImage(frameIdx, boxToDraw) {
-            // Calls the API to get the raw image data
-            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
-            const imageBlob = await response.blob();
-            // When the image data has loaded into our image object, redraw the canvas.
-            currentImage.onload = () => {
-                redrawCanvas(boxToDraw);
-            };
-            currentImage.src = URL.createObjectURL(imageBlob);
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                const currentFrame = getCurrentFrame();
+                timeline.value = currentFrame;
+
+                const activeIdx = findActiveInterval(currentFrame);
+                if (activeIdx !== -1) {
+                    if(activeIdx != currentIntervalIdx) {
+                        loadInterval(activeIdx, true);
+                    }
+                    const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
+                    const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                    drawBoundingBox(box);
+                }
+            }
+            requestAnimationFrame(drawLoop);
         }
 
-        // This is the core of the real-time preview. It redraws everything on the canvas.
-        function redrawCanvas(box) {
-            // Don't do anything if the image isn't fully loaded yet
-            if (!currentImage.complete || currentImage.naturalWidth === 0) return;
-            
-            // Set the canvas size to match the image's actual size
-            canvas.width = currentImage.naturalWidth;
-            canvas.height = currentImage.naturalHeight;
-            
-            // Clear the canvas and draw the background video frame
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(currentImage, 0, 0);
-            
-            // Draw the green bounding box on top of the video frame
-            drawBoundingBox(box);
-        }
-
-        // A simple utility function to draw a rectangle on the canvas.
         function drawBoundingBox(box) {
+            // Scale box coordinates from original video dimensions to displayed video dimensions
+            const scaleX = canvas.width / taskInfo.video_width;
+            const scaleY = canvas.height / taskInfo.video_height;
             ctx.strokeStyle = 'lime';
             ctx.lineWidth = 2;
-            ctx.strokeRect(box.x, box.y, box.width, box.height);
+            ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
         }
         
         // --- HANDLING USER INPUT AND SAVING ---
-
-        // This function is called every time a slider or number input is changed.
         function handleSliderInput() {
-            // Get the current values from all sliders
             const box = {
                 x: parseInt(sliders.x.value),
                 y: parseInt(sliders.y.value),
                 width: parseInt(sliders.width.value),
                 height: parseInt(sliders.height.value)
             };
-            // Update the text display next to each slider
             for(const key in values) {
                 values[key].value = box[key];
             }
             
-            // Redraw the canvas to provide instant visual feedback with the correct box
-            redrawCanvas(box);
+            // Redraw immediately for feedback
+            canvas.width = video.clientWidth;
+            canvas.height = video.clientHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBoundingBox(box);
 
-            // Use a debounce timer to avoid spamming the server.
-            // This waits for the user to stop moving the slider for 200ms before saving.
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
                 saveBox(box);
@@ -373,9 +388,13 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval_idx: currentIntervalIdx, ...box })
             });
-        }
+                }
 
         // --- EVENT LISTENERS ---
+
+        timeline.oninput = () => {
+            video.currentTime = timeline.value / taskInfo.fps;
+        };
 
         // A function to apply the current step value to all sliders
         function updateSliderSteps() {
