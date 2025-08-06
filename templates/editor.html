@@ -148,7 +148,7 @@
             <div class="controls">
                 <div class="timeline-container">
                     <label for="timeline-slider">Timeline:</label>
-                    <input type="range" id="timeline-slider" value="0" step="1" min="0">
+                    <input type="range" id="timeline-slider" value="0" step="1" min="0" max="1000">
                     <span id="current-frame-display">Frame: 0</span>
                     <div class="timeline-controls">
                         <label>Timeline Step: <input type="number" id="timeline-step-input" value="1" min="1" max="100"></label>
@@ -231,6 +231,7 @@
         let currentIntervalIdx = 0; // The index of the interval we are currently editing
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
         let currentImage = new Image(); // An image object to hold the current raw video frame
+        let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
 
         // Get references to all the HTML elements we will interact with
         const video = document.getElementById('video-player');
@@ -286,7 +287,7 @@
                  video.onloadedmetadata = () => {
                      taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
                      timeline.max = Math.floor(video.duration * taskInfo.fps);
-                     timeline.step = timelineStepInput.value;
+                     timeline.step = parseInt(timelineStepInput.value) || 1;
                      loadInterval(0);
                      requestAnimationFrame(drawLoop);
                  };
@@ -313,6 +314,8 @@
 
             if (!fromTimeline) {
                 video.currentTime = interval.frame_range[0] / taskInfo.fps;
+                // Update timeline to match the interval start
+                timeline.value = interval.frame_range[0];
             }
 
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
@@ -361,8 +364,8 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const currentFrame = getCurrentFrame();
             
-            // Only update timeline if video is playing (not when manually scrubbing)
-            if (!video.paused) {
+            // Only update timeline if video is playing AND user is not manually scrubbing
+            if (!video.paused && !isUserScrubbing) {
                 timeline.value = currentFrame;
             }
             currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
@@ -375,6 +378,9 @@
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
                 const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
                 drawBoundingBox(box);
+            } else {
+                // Clear canvas if no active interval
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
             requestAnimationFrame(drawLoop);
         }
@@ -430,6 +436,9 @@
                     end_frame: endFrame
                 })
             });
+            
+            // Update the interval info display after saving
+            intervalInfo.textContent = `Editing Interval ${currentIntervalIdx + 1} / ${intervals.length} (Frames ${startFrame}-${endFrame})`;
         }
 
 
@@ -447,13 +456,18 @@
 
         // --- EVENT LISTENERS ---
 
+        timeline.onmousedown = () => {
+            isUserScrubbing = true;
+        };
+        
         timeline.oninput = () => {
-            video.currentTime = timeline.value / taskInfo.fps;
-            // Force immediate redraw when manually scrubbing
-            const currentFrame = parseInt(timeline.value);
-            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            const targetFrame = parseInt(timeline.value);
+            video.currentTime = targetFrame / taskInfo.fps;
             
-            const activeIdx = findActiveInterval(currentFrame);
+            // Force immediate redraw when manually scrubbing
+            currentFrameDisplay.textContent = `Frame: ${targetFrame}`;
+            
+            const activeIdx = findActiveInterval(targetFrame);
             if (activeIdx !== -1) {
                 if(activeIdx !== currentIntervalIdx) {
                     loadInterval(activeIdx, true);
@@ -466,11 +480,33 @@
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
         };
+        
+        timeline.onmouseup = () => {
+            isUserScrubbing = false;
+        };
+        
+        // Add touch support for mobile devices
+        timeline.ontouchstart = () => {
+            isUserScrubbing = true;
+        };
+        
+        timeline.ontouchend = () => {
+            isUserScrubbing = false;
+        };
+
+        // Update timeline when video time changes (e.g., from navigation)
+        video.ontimeupdate = () => {
+            if (video.paused) {
+                const currentFrame = getCurrentFrame();
+                timeline.value = currentFrame;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            }
+        };
 
         startFrameInput.onchange = saveInterval;
         endFrameInput.onchange = saveInterval;
         timelineStepInput.onchange = () => {
-            timeline.step = timelineStepInput.value;
+            timeline.step = parseInt(timelineStepInput.value) || 1;
         };
 
         // A function to apply the current step value to all sliders
@@ -511,8 +547,16 @@
         };
 
         // Attach the navigation functions to the Previous/Next buttons.
-        prevBtn.onclick = () => loadInterval(currentIntervalIdx - 1);
-        nextBtn.onclick = () => loadInterval(currentIntervalIdx + 1);
+        prevBtn.onclick = () => {
+            if (currentIntervalIdx > 0) {
+                loadInterval(currentIntervalIdx - 1);
+            }
+        };
+        nextBtn.onclick = () => {
+            if (currentIntervalIdx < intervals.length - 1) {
+                loadInterval(currentIntervalIdx + 1);
+            }
+        };
 
         useLastBtn.onclick = () => {
             if (currentIntervalIdx > 0) {
@@ -600,14 +644,20 @@
                 });
                 if (response.ok) {
                     const data = await response.json();
-                    alert("Interval merged with previous successfully!");
                     
                     // Update the UI with the new intervals
                     intervals = data.new_intervals;
                     originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
                     
-                    // Stay on the same index (which is now the merged interval)
-                    await loadInterval(currentIntervalIdx - 1);
+                    // Calculate the new interval index (current interval was merged into previous)
+                    const newIntervalIdx = currentIntervalIdx - 1;
+                    const mergedInterval = intervals[newIntervalIdx];
+                    
+                    // Show detailed success message
+                    alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
+                    
+                    // Load the merged interval and update timeline
+                    await loadInterval(newIntervalIdx);
                 } else {
                     alert("Failed to merge with previous interval.");
                 }
@@ -644,13 +694,17 @@
                 });
                 if (response.ok) {
                     const data = await response.json();
-                    alert("Interval split successfully!");
                     
                     // Update the UI with the new intervals
                     intervals = data.new_intervals;
                     originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
                     
-                    // Stay on the first part of the split interval
+                    // Show detailed success message
+                    const firstPart = intervals[currentIntervalIdx];
+                    const secondPart = intervals[currentIntervalIdx + 1];
+                    alert(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    
+                    // Stay on the first part of the split interval and update timeline
                     await loadInterval(currentIntervalIdx);
                 } else {
                     alert("Failed to split interval.");
