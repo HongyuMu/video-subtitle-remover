@@ -532,6 +532,144 @@ async def stream_video(task_id: str):
     return FileResponse(video_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
 
 
+class AdjustIntervalRequest(BaseModel):
+    interval_idx: int
+    start_frame: int
+    end_frame: int
+
+@app.post("/adjust_interval/{task_id}", include_in_schema=False)
+async def adjust_interval(task_id: str, req: AdjustIntervalRequest):
+    """Adjusts the start and end frame for a specific interval."""
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    frame_intervals = result.get("frame_intervals", [])
+    if not (0 <= req.interval_idx < len(frame_intervals)):
+        raise HTTPException(status_code=400, detail="Invalid interval_idx")
+
+    # Basic validation
+    if req.start_frame < 0 or req.end_frame < req.start_frame:
+         raise HTTPException(status_code=400, detail="Invalid frame range")
+
+    # Update the interval
+    frame_intervals[req.interval_idx] = (req.start_frame, req.end_frame)
+    TASK_RESULTS[task_id]["frame_intervals"] = frame_intervals
+
+    return {
+        "message": f"Interval {req.interval_idx} adjusted successfully.",
+        "new_interval": (req.start_frame, req.end_frame)
+    }
+
+
+class MergeWithPreviousRequest(BaseModel):
+    interval_idx: int
+
+@app.post("/merge_with_previous/{task_id}", include_in_schema=False)
+async def merge_with_previous(task_id: str, req: MergeWithPreviousRequest):
+    """Merges the current interval with the previous one."""
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    frame_intervals = result.get("frame_intervals", [])
+    distinct_coords = result.get("distinct_coords", [])
+    
+    if req.interval_idx <= 0 or req.interval_idx >= len(frame_intervals):
+        raise HTTPException(status_code=400, detail="Invalid interval_idx")
+
+    # Merge the current interval with the previous one
+    prev_start, prev_end = frame_intervals[req.interval_idx - 1]
+    curr_start, curr_end = frame_intervals[req.interval_idx]
+    
+    # Create new merged interval
+    merged_start = prev_start
+    merged_end = curr_end
+    
+    # Use the bounding box that covers both intervals
+    prev_coords = distinct_coords[req.interval_idx - 1]
+    curr_coords = distinct_coords[req.interval_idx]
+    merged_coords = find_smallest_bounding_box([prev_coords, curr_coords])
+    
+    # Update the previous interval with merged data
+    frame_intervals[req.interval_idx - 1] = (merged_start, merged_end)
+    distinct_coords[req.interval_idx - 1] = merged_coords
+    
+    # Remove the current interval
+    frame_intervals.pop(req.interval_idx)
+    distinct_coords.pop(req.interval_idx)
+    
+    # Update task results
+    result["frame_intervals"] = frame_intervals
+    result["distinct_coords"] = distinct_coords
+    
+    return {
+        "message": f"Interval {req.interval_idx} merged with previous interval.",
+        "new_intervals": [
+            {
+                "interval_idx": idx,
+                "frame_range": interval,
+                "coords": coords
+            }
+            for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+        ]
+    }
+
+
+class SplitIntervalRequest(BaseModel):
+    interval_idx: int
+    split_frame: int
+
+@app.post("/split_interval/{task_id}", include_in_schema=False)
+async def split_interval(task_id: str, req: SplitIntervalRequest):
+    """Splits an interval at a specific frame."""
+    result = TASK_RESULTS.get(task_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    frame_intervals = result.get("frame_intervals", [])
+    distinct_coords = result.get("distinct_coords", [])
+    
+    if not (0 <= req.interval_idx < len(frame_intervals)):
+        raise HTTPException(status_code=400, detail="Invalid interval_idx")
+
+    start_frame, end_frame = frame_intervals[req.interval_idx]
+    
+    if not (start_frame < req.split_frame < end_frame):
+        raise HTTPException(status_code=400, detail="Split frame must be within the interval")
+
+    # Create two new intervals
+    first_interval = (start_frame, req.split_frame - 1)
+    second_interval = (req.split_frame, end_frame)
+    
+    # Use the same coordinates for both parts (user can adjust later)
+    coords = distinct_coords[req.interval_idx]
+    
+    # Replace the current interval with the first part
+    frame_intervals[req.interval_idx] = first_interval
+    
+    # Insert the second part after the current interval
+    frame_intervals.insert(req.interval_idx + 1, second_interval)
+    distinct_coords.insert(req.interval_idx + 1, coords)
+    
+    # Update task results
+    result["frame_intervals"] = frame_intervals
+    result["distinct_coords"] = distinct_coords
+    
+    return {
+        "message": f"Interval {req.interval_idx} split at frame {req.split_frame}.",
+        "new_intervals": [
+            {
+                "interval_idx": idx,
+                "frame_range": interval,
+                "coords": coords
+            }
+            for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+        ]
+    }
+
+
+
 
 def merge_intervals(intervals, distinct_coords):
     """
