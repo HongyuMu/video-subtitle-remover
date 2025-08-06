@@ -114,10 +114,6 @@
         <div class="editor-header">
             <h1>Subtitle Box Editor</h1>
             <h3 id="interval-info">Loading...</h3>
-            <div id="debug-info" style="background-color: #e8f4f8; padding: 10px; border-radius: 5px; margin: 10px 0; font-family: monospace; font-size: 0.9em; display: none;">
-                <strong>Debug Information:</strong>
-                <div id="debug-details"></div>
-            </div>
         </div>
         <div class="editor-main">
             <div class="preview-container">
@@ -190,14 +186,11 @@
         let currentIntervalIdx = 0; // The index of the interval we are currently editing
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
         let currentImage = new Image(); // An image object to hold the current raw video frame
-        let debugInfo = null; // Debug information from the detection process
 
         // Get references to all the HTML elements we will interact with
         const canvas = document.getElementById('preview-canvas');
         const ctx = canvas.getContext('2d');
         const intervalInfo = document.getElementById('interval-info');
-        const debugInfoDiv = document.getElementById('debug-info');
-        const debugDetailsDiv = document.getElementById('debug-details');
         const sliders = {
             x: document.getElementById('x-slider'),
             y: document.getElementById('y-slider'),
@@ -219,21 +212,6 @@
         const resetBtn = document.getElementById('reset-btn');
         const notSubBtn = document.getElementById('not-sub-btn');
 
-        // Function to display debug information if available
-        function displayDebugInfo() {
-            if (debugInfo && debugInfo.debug_info) {
-                const info = debugInfo.debug_info;
-                debugDetailsDiv.innerHTML = `
-                    <p><strong>Raw frames with subtitles:</strong> ${info.raw_frames_with_subtitles}</p>
-                    <p><strong>Total boxes found:</strong> ${info.total_boxes_found}</p>
-                    <p><strong>Frame numbers (first 20):</strong> ${info.frame_numbers.join(', ')}</p>
-                    <p><strong>Sample detection boxes:</strong></p>
-                    <pre>${JSON.stringify(info.sample_boxes, null, 2)}</pre>
-                `;
-                debugInfoDiv.style.display = 'block';
-            }
-        }
-
         // This is the main function that runs when the page loads.
         // It fetches all necessary data from the server to set up the editor.
         async function initializeEditor() {
@@ -250,20 +228,6 @@
                 intervals = intervalsData.intervals;
                 originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals)); // Deep copy for reset
                 taskInfo = infoData;
-                
-                // Check if debug info was passed from the debug endpoint
-                const urlParams = new URLSearchParams(window.location.search);
-                if (urlParams.get('debug') === 'true') {
-                    try {
-                        const debugResponse = await fetch(`/task_debug_info/${taskId}`);
-                        if (debugResponse.ok) {
-                            debugInfo = await debugResponse.json();
-                            displayDebugInfo();
-                        }
-                    } catch (e) {
-                        console.log("No debug info available");
-                    }
-                }
                 
                 // Set the initial step value for all sliders
                 updateSliderSteps();
