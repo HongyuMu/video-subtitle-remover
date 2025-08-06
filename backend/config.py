@@ -8,7 +8,6 @@ import platform
 import stat
 from fsplit.filesplit import Filesplit
 import onnxruntime as ort
-import configparser
 
 # 项目版本号
 VERSION = "1.1.1"
@@ -27,18 +26,6 @@ LAMA_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'big-lama')
 STTN_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'sttn', 'infer_model.pth')
 VIDEO_INPAINT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'video')
 MODEL_VERSION = 'V4'
-settings_config = configparser.ConfigParser()
-MODE_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'settings.ini')
-settings_config.read(MODE_CONFIG_PATH, encoding='utf-8')
-
-# Handle missing configuration gracefully
-try:
-    REC_CHAR_TYPE = settings_config['DEFAULT']['Language']
-except (KeyError, configparser.NoSectionError):
-    # Default to Chinese if configuration is missing
-    REC_CHAR_TYPE = 'ch'
-REC_MODEL_BASE = os.path.join(BASE_DIR, 'models')
-REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
 
@@ -108,9 +95,6 @@ class InpaintMode(Enum):
 # ×××××××××××××××××××× [可以改] start ××××××××××××××××××××
 # 是否使用h264编码，如果需要安卓手机分享生成的视频，请打开该选项
 USE_H264 = True
-
-# OCR GPU settings
-USE_GPU = torch.cuda.is_available() and not USE_DML
 
 # ×××××××××× 通用设置 start ××××××××××
 """

@@ -37,9 +37,7 @@ class SubtitleDetect:
     def __init__(self, video_path, sub_area=None):
         self.video_path = video_path
         self.sub_area = sub_area
-        # Initialize the text detector only if it hasn't been initialized
-        if not hasattr(self, 'text_detector') or self.text_detector is None:
-            self.text_detector = ModelManager.get_text_detector()
+        self.text_detector = ModelManager.get_text_detector()
 
     def detect_subtitle(self, img):
         dt_boxes, elapse = self.text_detector(img)
@@ -60,10 +58,10 @@ class SubtitleDetect:
                 (x2, y2) = int(i[1][0]), int(i[1][1])
                 (x3, y3) = int(i[2][0]), int(i[2][1])
                 (x4, y4) = int(i[3][0]), int(i[3][1])
-                xmin = min(x1, x2, x3, x4)
-                xmax = max(x1, x2, x3, x4)
-                ymin = min(y1, y2, y3, y4)
-                ymax = max(y1, y2, y3, y4)
+                xmin = max(x1, x4)
+                xmax = min(x2, x3)
+                ymin = max(y1, y2)
+                ymax = min(y3, y4)
                 coordinate_list.append((xmin, xmax, ymin, ymax))
         return coordinate_list
 
@@ -81,7 +79,7 @@ class SubtitleDetect:
                 break
             # 读取视频帧成功
             current_frame_no += 1
-            dt_boxes, elapse = self.detect_subtitle(frame) # elapse is the time taken to detect the subtitle and is not used
+            dt_boxes, elapse = self.detect_subtitle(frame)
             coordinate_list = self.get_coordinates(dt_boxes.tolist())
             if coordinate_list:
                 temp_list = []
@@ -239,10 +237,10 @@ class SubtitleDetect:
         width_diff = abs(width1 - width2)
         height_diff = abs(height1 - height2)
         
-        # Dimensions are similar if their difference is less than 10% of the smaller dimension.
+        # Dimensions are similar if their difference is less than 20% of the smaller dimension.
         dimensions_are_similar = (
-            width_diff < min(width1, width2) * 0.1 and
-            height_diff < min(height1, height2) * 0.1
+            width_diff < min(width1, width2) * 0.2 and
+            height_diff < min(height1, height2) * 0.2
         )
         
         # Both position and size must be similar
@@ -573,7 +571,7 @@ class SubtitleDetect:
         sub_area_with_frequency = self.get_frequency_in_range(sub_frame_no_list_continuous, subtitle_frame_no_box_dict)
         correct_sub_area = []
         for sub_area in sub_area_with_frequency.keys():
-            if sub_area_with_frequency[sub_area] >= (fps // 10):
+            if sub_area_with_frequency[sub_area] >= (fps // 5):
                 correct_sub_area.append(sub_area)
             else:
                 print(f'drop {sub_area}')
@@ -668,10 +666,10 @@ class SubtitleRemover:
                 (x2, y2) = int(i[1][0]), int(i[1][1])
                 (x3, y3) = int(i[2][0]), int(i[2][1])
                 (x4, y4) = int(i[3][0]), int(i[3][1])
-                xmin = min(x1, x2, x3, x4)
-                xmax = max(x1, x2, x3, x4)
-                ymin = min(y1, y2, y3, y4)
-                ymax = max(y1, y2, y3, y4)
+                xmin = max(x1, x4)
+                xmax = min(x2, x3)
+                ymin = max(y1, y2)
+                ymax = min(y3, y4)
                 coordinate_list.append((xmin, xmax, ymin, ymax))
         return coordinate_list
 
@@ -838,11 +836,9 @@ class SubtitleRemover:
         # Prepare the list of intervals and corresponding coordinates
         intervals = self.frame_intervals
         coords = self.distinct_coords
-        
-        # This is where all frames were being loaded into memory.
-        # The logic is now moved inside STTNVideoInpaint to process frame by frame.
+        # Pass all intervals and coordinates to STTNVideoInpaint at once
         sttn_video_inpaint = STTNVideoInpaint(
-            video_path=self.video_path,
+            self.video_path,
             subtitle_areas=coords,
             frame_intervals=intervals
         )
