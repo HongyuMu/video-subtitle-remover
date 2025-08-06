@@ -20,10 +20,10 @@ def get_coordinates(dt_box):
                     (x4, y4) = int(i[3][0]), int(i[3][1])
                     
                     # Define the bounding box
-                    xmin = min(x1, x4)
-                    xmax = max(x2, x3)
-                    ymin = min(y1, y2)
-                    ymax = max(y3, y4)
+                    xmin = min(x1, x2, x3, x4)
+                    xmax = max(x1, x2, x3, x4)
+                    ymin = min(y1, y2, y3, y4)
+                    ymax = max(y1, y2, y3, y4)
                     
                     coordinate_list.append((xmin, xmax, ymin, ymax))
                 except (ValueError, IndexError):

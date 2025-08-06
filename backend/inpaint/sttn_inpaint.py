@@ -346,10 +346,14 @@ class STTNVideoInpaint:
             gc.collect()
 
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        inpainted_count = 0
+        original_count = 0
+        
         # Use the existing tbar from SubtitleRemover instead of creating a new one
         for i in range(total_frames):
             if i in inpainted_results:
                 writer.write(inpainted_results[i])
+                inpainted_count += 1
                 # Advance the video capture position to keep it in sync
                 ret, _ = cap.read() 
                 if not ret:
@@ -358,6 +362,7 @@ class STTNVideoInpaint:
                 ret, frame = cap.read()
                 if ret:
                     writer.write(frame)
+                    original_count += 1
                 else:
                     print(f"Warning: Could not read frame {i+1} from source video.")
             
@@ -368,6 +373,8 @@ class STTNVideoInpaint:
                  if tbar is not None:
                      input_sub_remover.progress_remover = (100 * float(i) / float(total_frames))
                      input_sub_remover.progress_total = 50 + (input_sub_remover.progress_remover // 2)
+        
+        print(f"[STTN] Frame writing summary: {inpainted_count} inpainted, {original_count} original, {total_frames} total")
 
         print(f"[STTN] All frames processed and written to output video. Total frames: {total_frames}")
         cap.release()
