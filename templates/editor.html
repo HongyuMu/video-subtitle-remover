@@ -59,13 +59,23 @@
             height: 100%;
             pointer-events: none;
         }
-        .timeline-container {
-            width: 100%;
-            padding: 10px 0;
-        }
-        #timeline-slider {
-            width: 100%;
-        }
+                 .timeline-container {
+             width: 100%;
+             padding: 10px 0;
+         }
+         #timeline-slider {
+             width: 100%;
+         }
+         .timeline-controls {
+             margin-top: 10px;
+             display: flex;
+             align-items: center;
+             gap: 10px;
+         }
+         .timeline-controls input[type="number"] {
+             width: 60px;
+             padding: 3px;
+         }
         .controls {
             background-color: var(--editor-bg-color);
             padding: 20px;
@@ -138,8 +148,17 @@
             <div class="controls">
                 <div class="timeline-container">
                     <label for="timeline-slider">Timeline:</label>
-                    <input type="range" id="timeline-slider" value="0" step="1">
+                    <input type="range" id="timeline-slider" value="0" step="1" min="0">
+                    <span id="current-frame-display">Frame: 0</span>
+                    <div class="timeline-controls">
+                        <label>Timeline Step: <input type="number" id="timeline-step-input" value="1" min="1" max="100"></label>
+                    </div>
                 </div>
+                <div class="interval-controls">
+                    <label>Start Frame: <input type="number" id="start-frame-input"></label>
+                    <label>End Frame: <input type="number" id="end-frame-input"></label>
+                </div>
+
                 <div class="instructions">
                     <p><b>How to adjust:</b></p>
                     <ul>
@@ -189,6 +208,12 @@
                 <div class="extra-controls">
                     <button id="merge-btn" style="width: 100%;">Merge Similar Boxes</button>
                 </div>
+                <div class="extra-controls">
+                    <button id="merge-prev-btn" style="width: 100%;">Merge with Previous</button>
+                </div>
+                <div class="extra-controls">
+                    <button id="split-interval-btn" style="width: 100%;">Split Current Interval</button>
+                </div>
                 <button id="finish-btn">Finish and Process</button>
             </div>
         </div>
@@ -213,6 +238,10 @@
         const canvas = document.getElementById('preview-canvas');
         const ctx = canvas.getContext('2d');
         const intervalInfo = document.getElementById('interval-info');
+        const currentFrameDisplay = document.getElementById('current-frame-display');
+        const startFrameInput = document.getElementById('start-frame-input');
+        const endFrameInput = document.getElementById('end-frame-input');
+        const timelineStepInput = document.getElementById('timeline-step-input');
         const sliders = {
             x: document.getElementById('x-slider'),
             y: document.getElementById('y-slider'),
@@ -233,6 +262,8 @@
         const mergeBtn = document.getElementById('merge-btn');
         const resetBtn = document.getElementById('reset-btn');
         const notSubBtn = document.getElementById('not-sub-btn');
+        const mergePrevBtn = document.getElementById('merge-prev-btn');
+        const splitIntervalBtn = document.getElementById('split-interval-btn');
 
         // This is the main function that runs when the page loads.
         async function initializeEditor() {
@@ -250,14 +281,15 @@
                 
                 updateSliderSteps();
                 
-                // Setup video player
-                video.src = `/stream_video/${taskId}`;
-                video.onloadedmetadata = () => {
-                    taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
-                    timeline.max = Math.floor(video.duration * taskInfo.fps);
-                    loadInterval(0);
-                    requestAnimationFrame(drawLoop);
-                };
+                                 // Setup video player
+                 video.src = `/stream_video/${taskId}`;
+                 video.onloadedmetadata = () => {
+                     taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
+                     timeline.max = Math.floor(video.duration * taskInfo.fps);
+                     timeline.step = timelineStepInput.value;
+                     loadInterval(0);
+                     requestAnimationFrame(drawLoop);
+                 };
 
             } catch (error) {
                 console.error("Failed to initialize editor:", error);
@@ -284,6 +316,8 @@
             }
 
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
+            startFrameInput.value = interval.frame_range[0];
+            endFrameInput.value = interval.frame_range[1];
             
             const [xmin, xmax, ymin, ymax] = interval.coords;
             const currentBox = {
@@ -300,6 +334,8 @@
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
             useLastBtn.disabled = currentIntervalIdx === 0;
             mergeBtn.disabled = false; // Always enabled
+            mergePrevBtn.disabled = currentIntervalIdx === 0; // Can't merge with previous if first interval
+            splitIntervalBtn.disabled = false; // Always enabled
         }
         
         function updateSliderRanges() {
@@ -318,24 +354,27 @@
 
         // --- RENDERING AND PREVIEW ---
         function drawLoop() {
-            if (!video.paused && !video.ended) {
-                 // Match canvas size to video element size for correct scaling
-                canvas.width = video.clientWidth;
-                canvas.height = video.clientHeight;
+            // Match canvas size to video element size for correct scaling
+            canvas.width = video.clientWidth;
+            canvas.height = video.clientHeight;
 
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                const currentFrame = getCurrentFrame();
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            const currentFrame = getCurrentFrame();
+            
+            // Only update timeline if video is playing (not when manually scrubbing)
+            if (!video.paused) {
                 timeline.value = currentFrame;
+            }
+            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
 
-                const activeIdx = findActiveInterval(currentFrame);
-                if (activeIdx !== -1) {
-                    if(activeIdx != currentIntervalIdx) {
-                        loadInterval(activeIdx, true);
-                    }
-                    const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
-                    const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
-                    drawBoundingBox(box);
+            const activeIdx = findActiveInterval(currentFrame);
+            if (activeIdx !== -1) {
+                if(activeIdx !== currentIntervalIdx) {
+                    loadInterval(activeIdx, true);
                 }
+                const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
+                const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                drawBoundingBox(box);
             }
             requestAnimationFrame(drawLoop);
         }
@@ -378,6 +417,22 @@
             handleSliderInput();
         }
 
+        async function saveInterval() {
+            const startFrame = parseInt(startFrameInput.value);
+            const endFrame = parseInt(endFrameInput.value);
+            intervals[currentIntervalIdx].frame_range = [startFrame, endFrame];
+            await fetch(`/adjust_interval/${taskId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    interval_idx: currentIntervalIdx, 
+                    start_frame: startFrame,
+                    end_frame: endFrame
+                })
+            });
+        }
+
+
         // Sends the updated box coordinates to the server to be stored.
         async function saveBox(box) {
             // Update the coordinates in our local 'intervals' array first
@@ -394,6 +449,28 @@
 
         timeline.oninput = () => {
             video.currentTime = timeline.value / taskInfo.fps;
+            // Force immediate redraw when manually scrubbing
+            const currentFrame = parseInt(timeline.value);
+            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            
+            const activeIdx = findActiveInterval(currentFrame);
+            if (activeIdx !== -1) {
+                if(activeIdx !== currentIntervalIdx) {
+                    loadInterval(activeIdx, true);
+                }
+                const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
+                const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                drawBoundingBox(box);
+            } else {
+                // Clear canvas if no active interval
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+            }
+        };
+
+        startFrameInput.onchange = saveInterval;
+        endFrameInput.onchange = saveInterval;
+        timelineStepInput.onchange = () => {
+            timeline.step = timelineStepInput.value;
         };
 
         // A function to apply the current step value to all sliders
@@ -509,6 +586,81 @@
             } finally {
                 mergeBtn.disabled = false;
                 mergeBtn.textContent = "Merge Similar Boxes";
+            }
+        };
+
+        mergePrevBtn.onclick = async () => {
+            mergePrevBtn.disabled = true;
+            mergePrevBtn.textContent = "Merging...";
+            try {
+                const response = await fetch(`/merge_with_previous/${taskId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ interval_idx: currentIntervalIdx })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    alert("Interval merged with previous successfully!");
+                    
+                    // Update the UI with the new intervals
+                    intervals = data.new_intervals;
+                    originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
+                    
+                    // Stay on the same index (which is now the merged interval)
+                    await loadInterval(currentIntervalIdx - 1);
+                } else {
+                    alert("Failed to merge with previous interval.");
+                }
+            } catch (e) {
+                alert("An error occurred during merging.");
+                console.error("Merge error:", e);
+            } finally {
+                mergePrevBtn.disabled = false;
+                mergePrevBtn.textContent = "Merge with Previous";
+            }
+        };
+
+        splitIntervalBtn.onclick = async () => {
+            const currentFrame = getCurrentFrame();
+            const interval = intervals[currentIntervalIdx];
+            const startFrame = interval.frame_range[0];
+            const endFrame = interval.frame_range[1];
+            
+            if (currentFrame <= startFrame || currentFrame >= endFrame) {
+                alert("Please position the timeline within the current interval to split it.");
+                return;
+            }
+            
+            splitIntervalBtn.disabled = true;
+            splitIntervalBtn.textContent = "Splitting...";
+            try {
+                const response = await fetch(`/split_interval/${taskId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        interval_idx: currentIntervalIdx,
+                        split_frame: currentFrame
+                    })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    alert("Interval split successfully!");
+                    
+                    // Update the UI with the new intervals
+                    intervals = data.new_intervals;
+                    originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
+                    
+                    // Stay on the first part of the split interval
+                    await loadInterval(currentIntervalIdx);
+                } else {
+                    alert("Failed to split interval.");
+                }
+            } catch (e) {
+                alert("An error occurred during splitting.");
+                console.error("Split error:", e);
+            } finally {
+                splitIntervalBtn.disabled = false;
+                splitIntervalBtn.textContent = "Split Current Interval";
             }
         };
 
