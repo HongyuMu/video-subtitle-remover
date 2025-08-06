@@ -521,6 +521,18 @@ async def download_video(video_filename: str):
     return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
 
 
+@app.get("/stream_video/{task_id}", include_in_schema=False)
+async def stream_video(task_id: str):
+    """Streams the video file for the editor's <video> tag."""
+    result = TASK_RESULTS.get(task_id)
+    if not result or not result.get("video_path") or not os.path.exists(result["video_path"]):
+        raise HTTPException(status_code=404, detail="Video for this task not found.")
+    
+    video_path = result["video_path"]
+    return FileResponse(video_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+
+
+
 def merge_intervals(intervals, distinct_coords):
     """
     Merge intervals that have similar coordinates.
