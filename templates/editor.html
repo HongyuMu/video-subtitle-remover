@@ -306,16 +306,31 @@
             return intervals.findIndex(i => frame >= i.frame_range[0] && frame <= i.frame_range[1]);
         }
 
+        function setTimelinePosition(frame) {
+            // Helper function to manually set timeline position
+            isUserScrubbing = true;
+            timeline.value = frame;
+            video.currentTime = frame / taskInfo.fps;
+            currentFrameDisplay.textContent = `Frame: ${frame}`;
+            setTimeout(() => {
+                isUserScrubbing = false;
+            }, 100);
+        }
+
         // --- CORE EDITOR LOGIC ---
-        function loadInterval(idx, fromTimeline = false) {
+        function loadInterval(idx, fromTimeline = false, goToEnd = false) {
             clearTimeout(debounceTimer);
+            
+            // Ensure valid index
+            if (idx < 0) idx = 0;
+            if (idx >= intervals.length) idx = intervals.length - 1;
+            
             currentIntervalIdx = idx;
             const interval = intervals[idx];
 
             if (!fromTimeline) {
-                video.currentTime = interval.frame_range[0] / taskInfo.fps;
-                // Update timeline to match the interval start
-                timeline.value = interval.frame_range[0];
+                const targetFrame = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
+                setTimelinePosition(targetFrame);
             }
 
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
@@ -333,8 +348,9 @@
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            prevBtn.disabled = currentIntervalIdx === 0;
-            nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
+            // Always enable navigation buttons - let the click handlers deal with bounds
+            prevBtn.disabled = false;
+            nextBtn.disabled = false;
             useLastBtn.disabled = currentIntervalIdx === 0;
             mergeBtn.disabled = false; // Always enabled
             mergePrevBtn.disabled = currentIntervalIdx === 0; // Can't merge with previous if first interval
@@ -368,11 +384,15 @@
             if (!video.paused && !isUserScrubbing) {
                 timeline.value = currentFrame;
             }
-            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            
+            // Always update current frame display
+            if (!isUserScrubbing) {
+                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            }
 
             const activeIdx = findActiveInterval(currentFrame);
             if (activeIdx !== -1) {
-                if(activeIdx !== currentIntervalIdx) {
+                if(activeIdx !== currentIntervalIdx && !isUserScrubbing) {
                     loadInterval(activeIdx, true);
                 }
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
@@ -461,13 +481,23 @@
         };
         
         timeline.oninput = () => {
+            isUserScrubbing = true; // Ensure scrubbing flag is set during input
             const targetFrame = parseInt(timeline.value);
-            video.currentTime = targetFrame / taskInfo.fps;
+            
+            // Clamp targetFrame to valid range
+            const maxFrame = parseInt(timeline.max) || 1000;
+            const clampedFrame = Math.max(0, Math.min(targetFrame, maxFrame));
+            
+            if (targetFrame !== clampedFrame) {
+                timeline.value = clampedFrame;
+            }
+            
+            video.currentTime = clampedFrame / taskInfo.fps;
             
             // Force immediate redraw when manually scrubbing
-            currentFrameDisplay.textContent = `Frame: ${targetFrame}`;
+            currentFrameDisplay.textContent = `Frame: ${clampedFrame}`;
             
-            const activeIdx = findActiveInterval(targetFrame);
+            const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if(activeIdx !== currentIntervalIdx) {
                     loadInterval(activeIdx, true);
@@ -481,8 +511,17 @@
             }
         };
         
+        timeline.onchange = () => {
+            // Reset scrubbing flag when input is finished
+            setTimeout(() => {
+                isUserScrubbing = false;
+            }, 100);
+        };
+        
         timeline.onmouseup = () => {
-            isUserScrubbing = false;
+            setTimeout(() => {
+                isUserScrubbing = false;
+            }, 100);
         };
         
         // Add touch support for mobile devices
@@ -491,7 +530,28 @@
         };
         
         timeline.ontouchend = () => {
-            isUserScrubbing = false;
+            setTimeout(() => {
+                isUserScrubbing = false;
+            }, 100);
+        };
+        
+        // Add keyboard support for timeline navigation
+        timeline.onkeydown = (e) => {
+            const currentValue = parseInt(timeline.value);
+            const step = parseInt(timeline.step) || 1;
+            let newValue = currentValue;
+            
+            if (e.key === 'ArrowLeft') {
+                e.preventDefault();
+                newValue = Math.max(0, currentValue - step);
+            } else if (e.key === 'ArrowRight') {
+                e.preventDefault();
+                newValue = Math.min(parseInt(timeline.max), currentValue + step);
+            }
+            
+            if (newValue !== currentValue) {
+                setTimelinePosition(newValue);
+            }
         };
 
         // Update timeline when video time changes (e.g., from navigation)
@@ -548,13 +608,22 @@
 
         // Attach the navigation functions to the Previous/Next buttons.
         prevBtn.onclick = () => {
-            if (currentIntervalIdx > 0) {
-                loadInterval(currentIntervalIdx - 1);
+            const newIdx = Math.max(0, currentIntervalIdx - 1);
+            if (newIdx !== currentIntervalIdx) {
+                loadInterval(newIdx);
+            } else {
+                // If already at first interval, go to the start of current interval
+                loadInterval(currentIntervalIdx, false, false);
             }
         };
+        
         nextBtn.onclick = () => {
-            if (currentIntervalIdx < intervals.length - 1) {
-                loadInterval(currentIntervalIdx + 1);
+            const newIdx = Math.min(intervals.length - 1, currentIntervalIdx + 1);
+            if (newIdx !== currentIntervalIdx) {
+                loadInterval(newIdx);
+            } else {
+                // If already at last interval, go to the end of current interval
+                loadInterval(currentIntervalIdx, false, true);
             }
         };
 
@@ -656,8 +725,8 @@
                     // Show detailed success message
                     alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
                     
-                    // Load the merged interval and update timeline
-                    await loadInterval(newIntervalIdx);
+                    // Load the merged interval and position timeline at the end
+                    await loadInterval(newIntervalIdx, false, true);
                 } else {
                     alert("Failed to merge with previous interval.");
                 }
@@ -704,8 +773,8 @@
                     const secondPart = intervals[currentIntervalIdx + 1];
                     alert(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
                     
-                    // Stay on the first part of the split interval and update timeline
-                    await loadInterval(currentIntervalIdx);
+                    // Stay on the first part of the split interval and position timeline at the end
+                    await loadInterval(currentIntervalIdx, false, true);
                 } else {
                     alert("Failed to split interval.");
                 }
