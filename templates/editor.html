@@ -232,6 +232,7 @@
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
         let currentImage = new Image(); // An image object to hold the current raw video frame
         let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
+        let isUpdated = false;
 
         // Get references to all the HTML elements we will interact with
         const video = document.getElementById('video-player');
@@ -265,7 +266,6 @@
         const notSubBtn = document.getElementById('not-sub-btn');
         const mergePrevBtn = document.getElementById('merge-prev-btn');
         const splitIntervalBtn = document.getElementById('split-interval-btn');
-        const isUpdated = false;
 
         // This is the main function that runs when the page loads.
         async function initializeEditor() {
@@ -495,7 +495,7 @@
             const targetFrame = parseInt(timeline.value);
             
             // Clamp targetFrame to valid range
-            const maxFrame = parseInt(timeline.max) || 2000;
+            const maxFrame = parseInt(timeline.max) || 1000;
             const clampedFrame = Math.max(0, Math.min(targetFrame, maxFrame));
             
             // Only update timeline.value if it's actually different to avoid interference
@@ -560,7 +560,7 @@
             const currentValue = parseInt(timeline.value);
             // Ensure step is always valid - get from input first, then timeline.step, then default to 1
             const step = parseInt(timelineStepInput.value) || parseInt(timeline.step) || 1;
-            // console.log(999,step); // track the step value that the user has set.
+            console.log(999,step);
             let newValue = currentValue;
             
             if (e.key === 'ArrowLeft') {
