@@ -331,7 +331,7 @@
         }
 
         // --- CORE EDITOR LOGIC ---
-        function loadInterval(idx, fromTimeline = false, goToEnd = false) {
+        async function loadInterval(idx, fromTimeline = false, goToEnd = false) {
             clearTimeout(debounceTimer);
             
             // Ensure valid index
@@ -361,13 +361,19 @@
             updateSliderRanges();
             updateSliderValues(currentBox);
 
+            // Fetch the raw video frame and then draw the correct box on top
+            await loadFrameImage(interval.frame_range[0], currentBox);
+
             // Always enable navigation buttons - let the click handlers deal with bounds
-            prevBtn.disabled = false;
-            nextBtn.disabled = false;
+            prevBtn.disabled = currentIntervalIdx === 0;
+            nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
             useLastBtn.disabled = currentIntervalIdx === 0;
-            mergeBtn.disabled = false; // Always enabled
-            mergePrevBtn.disabled = currentIntervalIdx === 0; // Can't merge with previous if first interval
-            splitIntervalBtn.disabled = false; // Always enabled
+
+            // Disable the general merge button if not the last interval
+            mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
+            mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
+            mergePrevBtn.disabled = currentIntervalIdx === 0;
+            splitIntervalBtn.disabled = false;
         }
         
         function updateSliderRanges() {
@@ -385,6 +391,36 @@
         }
 
         // --- RENDERING AND PREVIEW ---
+
+        // Fetches a single, clean video frame from the server (with no box drawn on it).
+        async function loadFrameImage(frameIdx, boxToDraw) {
+            // Calls the API to get the raw image data
+            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
+            const imageBlob = await response.blob();
+            // When the image data has loaded into our image object, redraw the canvas.
+            currentImage.onload = () => {
+                redrawCanvas(boxToDraw);
+            };
+            currentImage.src = URL.createObjectURL(imageBlob);
+        }
+
+        // This is the core of the real-time preview. It redraws everything on the canvas.
+        function redrawCanvas(box) {
+            // Don't do anything if the image isn't fully loaded yet
+            if (!currentImage.complete || currentImage.naturalWidth === 0) return;
+            
+            // Set the canvas size to match the image's actual size
+            canvas.width = currentImage.naturalWidth;
+            canvas.height = currentImage.naturalHeight;
+            
+            // Clear the canvas and draw the background video frame
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(currentImage, 0, 0);
+            
+            // Draw the green bounding box on top of the video frame
+            drawBoundingBox(box);
+        }
+        
         function drawLoop() {
             // Match canvas size to video element size for correct scaling
             canvas.width = video.clientWidth;
@@ -466,7 +502,9 @@
                     end_frame: endFrame
                 })
             });
-            
+
+            alert(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
+            console.log(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
             // Update the interval info display after saving
             intervalInfo.textContent = `Editing Interval ${currentIntervalIdx + 1} / ${intervals.length} (Frames ${startFrame}-${endFrame})`;
         }
@@ -476,13 +514,16 @@
         async function saveBox(box) {
             // Update the coordinates in our local 'intervals' array first
             intervals[currentIntervalIdx].coords = [box.x, box.x + box.width, box.y, box.y + box.height];
+
+            console.log(`Saving box for interval ${currentIntervalIdx + 1} with coordinates [${box.x}, ${box.x + box.width}, ${box.y}, ${box.y + box.height}]`);
             // Send the new data to the /adjust_box endpoint
             await fetch(`/adjust_box/${taskId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ interval_idx: currentIntervalIdx, ...box })
             });
-                }
+
+        }
 
         // --- EVENT LISTENERS ---
 
