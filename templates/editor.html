@@ -265,6 +265,7 @@
         const notSubBtn = document.getElementById('not-sub-btn');
         const mergePrevBtn = document.getElementById('merge-prev-btn');
         const splitIntervalBtn = document.getElementById('split-interval-btn');
+        const isUpdated = false;
 
         // This is the main function that runs when the page loads.
         async function initializeEditor() {
@@ -316,6 +317,7 @@
         function setTimelinePosition(frame) {
             // Helper function to manually set timeline position
             isUserScrubbing = true;
+            isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
             currentFrameDisplay.textContent = `Frame: ${frame}`;
@@ -493,7 +495,7 @@
             const targetFrame = parseInt(timeline.value);
             
             // Clamp targetFrame to valid range
-            const maxFrame = parseInt(timeline.max) || 1000;
+            const maxFrame = parseInt(timeline.max) || 2000;
             const clampedFrame = Math.max(0, Math.min(targetFrame, maxFrame));
             
             // Only update timeline.value if it's actually different to avoid interference
@@ -556,7 +558,9 @@
         // Add keyboard support for timeline navigation
         timeline.onkeydown = (e) => {
             const currentValue = parseInt(timeline.value);
-            const step = parseInt(timeline.step) || 1;
+            // Ensure step is always valid - get from input first, then timeline.step, then default to 1
+            const step = parseInt(timelineStepInput.value) || parseInt(timeline.step) || 1;
+            // console.log(999,step); // track the step value that the user has set.
             let newValue = currentValue;
             
             if (e.key === 'ArrowLeft') {
@@ -566,19 +570,17 @@
                 e.preventDefault();
                 newValue = Math.min(parseInt(timeline.max), currentValue + step);
             }
-            
-            if (newValue !== currentValue) {
-                setTimelinePosition(newValue);
-            }
+            setTimelinePosition(newValue);
         };
 
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
-            if (video.paused) {
+            if (video.paused && !isUpdated) {
                 const currentFrame = getCurrentFrame();
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
+            isUpdated = false;
         };
 
         startFrameInput.onchange = saveInterval;
