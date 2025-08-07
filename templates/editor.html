@@ -646,7 +646,7 @@
 
         stepInput.onchange = updateSliderSteps;
 
-        resetBtn.onclick = () => {
+        resetBtn.onclick = async () => {
             if (!originalIntervals.length) return;
 
             // Get the original, unmodified box for the current interval
@@ -659,9 +659,9 @@
                 height: ymax - ymin
             };
 
-            // Update UI, redraw canvas, and save the reverted state to the server
+            // Update UI, load the current frame image, redraw canvas, and save the reverted state to the server
             updateSliderValues(originalBox);
-            redrawCanvas(originalBox);
+            await loadFrameImage(getCurrentFrame(), originalBox);
             saveBox(originalBox);
 
             alert('The box for this interval has been reset to its original position.');
@@ -688,7 +688,7 @@
             }
         };
 
-        useLastBtn.onclick = () => {
+        useLastBtn.onclick = async () => {
             if (currentIntervalIdx > 0) {
                 const lastInterval = intervals[currentIntervalIdx - 1];
                 const [xmin, xmax, ymin, ymax] = lastInterval.coords;
@@ -699,7 +699,7 @@
                     // to the current box and automatically advance to the next one.
                     const nullBox = { x: 0, y: 0, width: 0, height: 0 };
                     updateSliderValues(nullBox);
-                    redrawCanvas(nullBox);
+                    await loadFrameImage(getCurrentFrame(), nullBox);
                     saveBox(nullBox);
                     if (currentIntervalIdx < intervals.length - 1) {
                         loadInterval(currentIntervalIdx + 1);
@@ -713,19 +713,19 @@
                         height: ymax - ymin
                     };
                     updateSliderValues(lastBox);
-                    redrawCanvas(lastBox);
+                    await loadFrameImage(getCurrentFrame(), lastBox);
                     saveBox(lastBox);
                 }
             }
         };
 
-        notSubBtn.onclick = () => {
+        notSubBtn.onclick = async () => {
             // Create a "null" box to represent no subtitle
             const nullBox = { x: 0, y: 0, width: 0, height: 0 };
 
-            // Update UI, redraw the canvas (with no box), and save this state to the server.
+            // Update UI, load the current frame image, redraw the canvas (with no box), and save this state to the server.
             updateSliderValues(nullBox);
-            redrawCanvas(nullBox);
+            await loadFrameImage(getCurrentFrame(), nullBox);
             saveBox(nullBox);
 
             alert('This interval has been marked as "Not a Subtitle" and will be skipped.');
