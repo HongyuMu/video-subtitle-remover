@@ -282,15 +282,22 @@
                 
                 updateSliderSteps();
                 
-                                 // Setup video player
-                 video.src = `/stream_video/${taskId}`;
-                 video.onloadedmetadata = () => {
-                     taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
-                     timeline.max = Math.floor(video.duration * taskInfo.fps);
-                     timeline.step = parseInt(timelineStepInput.value) || 1;
-                     loadInterval(0);
-                     requestAnimationFrame(drawLoop);
-                 };
+                // Setup video player
+                video.src = `/stream_video/${taskId}`;
+                video.onloadedmetadata = () => {
+                    // Get actual video properties
+                    taskInfo.fps = video.videoWidth > 0 ? video.getVideoPlaybackQuality().totalVideoFrames / video.duration : 30;
+                    if (!taskInfo.fps || isNaN(taskInfo.fps)) {
+                        taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
+                    }
+                    
+                    // Set timeline max to actual total frames for full video playback
+                    const totalFrames = Math.floor(video.duration * taskInfo.fps);
+                    timeline.max = totalFrames;
+                    timeline.step = parseInt(timelineStepInput.value) || 1;
+                    loadInterval(0);
+                    requestAnimationFrame(drawLoop);
+                };
 
             } catch (error) {
                 console.error("Failed to initialize editor:", error);
@@ -312,7 +319,11 @@
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
             currentFrameDisplay.textContent = `Frame: ${frame}`;
-            setTimeout(() => {
+            // Clear any existing timeout to prevent race conditions
+            if (window.timelineScrubbingTimeout) {
+                clearTimeout(window.timelineScrubbingTimeout);
+            }
+            window.timelineScrubbingTimeout = setTimeout(() => {
                 isUserScrubbing = false;
             }, 100);
         }
@@ -381,12 +392,9 @@
             const currentFrame = getCurrentFrame();
             
             // Only update timeline if video is playing AND user is not manually scrubbing
+            // This prevents the drawLoop from interfering with manual timeline scrubbing
             if (!video.paused && !isUserScrubbing) {
                 timeline.value = currentFrame;
-            }
-            
-            // Always update current frame display
-            if (!isUserScrubbing) {
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
 
@@ -488,6 +496,7 @@
             const maxFrame = parseInt(timeline.max) || 1000;
             const clampedFrame = Math.max(0, Math.min(targetFrame, maxFrame));
             
+            // Only update timeline.value if it's actually different to avoid interference
             if (targetFrame !== clampedFrame) {
                 timeline.value = clampedFrame;
             }
@@ -513,13 +522,19 @@
         
         timeline.onchange = () => {
             // Reset scrubbing flag when input is finished
-            setTimeout(() => {
+            if (window.timelineScrubbingTimeout) {
+                clearTimeout(window.timelineScrubbingTimeout);
+            }
+            window.timelineScrubbingTimeout = setTimeout(() => {
                 isUserScrubbing = false;
             }, 100);
         };
         
         timeline.onmouseup = () => {
-            setTimeout(() => {
+            if (window.timelineScrubbingTimeout) {
+                clearTimeout(window.timelineScrubbingTimeout);
+            }
+            window.timelineScrubbingTimeout = setTimeout(() => {
                 isUserScrubbing = false;
             }, 100);
         };
@@ -530,7 +545,10 @@
         };
         
         timeline.ontouchend = () => {
-            setTimeout(() => {
+            if (window.timelineScrubbingTimeout) {
+                clearTimeout(window.timelineScrubbingTimeout);
+            }
+            window.timelineScrubbingTimeout = setTimeout(() => {
                 isUserScrubbing = false;
             }, 100);
         };
