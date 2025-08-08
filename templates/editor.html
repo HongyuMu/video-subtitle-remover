@@ -135,8 +135,6 @@
         /* Red actions */
         #reset-btn, #not-sub-btn { background-color: #dc3545; }
         #reset-btn:hover:not(:disabled), #not-sub-btn:hover:not(:disabled) { background-color: #bb2d3b; }
-
-        /* Keep Use Previous and Merge Previous as blue (default) */
     </style>
 </head>
 <body>
@@ -263,7 +261,6 @@
         const finishBtn = document.getElementById('finish-btn');
         const useLastBtn = document.getElementById('use-last-btn');
         const stepInput = document.getElementById('step-input');
-        const mergeBtn = document.getElementById('merge-btn');
         const resetBtn = document.getElementById('reset-btn');
         const notSubBtn = document.getElementById('not-sub-btn');
         const mergePrevBtn = document.getElementById('merge-prev-btn');
@@ -322,7 +319,7 @@
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${frame}`;
+            currentFrameDisplay.textContent = `Frame: ${Math.max(0,frame - 1)}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -372,8 +369,8 @@
             useLastBtn.disabled = currentIntervalIdx === 0;
 
             // Disable the general merge button if not the last interval
-            mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
-            mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
+            // mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
+            // mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
             mergePrevBtn.disabled = currentIntervalIdx === 0;
             splitIntervalBtn.disabled = false;
         }
@@ -761,33 +758,33 @@
             }
         };
 
-        mergeBtn.onclick = async () => {
-            mergeBtn.disabled = true;
-            mergeBtn.textContent = "Merging...";
-            try {
-                const response = await fetch(`/merge_similar_intervals/${taskId}`, { method: 'POST' });
-                if (response.ok) {
-                    const data = await response.json();
-                    alert(`Merge complete! ${data.original_count} intervals were combined into ${data.merged_count}. The editor will now refresh to the beginning of the new list for review.`);
+        // mergeBtn.onclick = async () => {
+        //     mergeBtn.disabled = true;
+        //     mergeBtn.textContent = "Merging...";
+        //     try {
+        //         const response = await fetch(`/merge_similar_intervals/${taskId}`, { method: 'POST' });
+        //         if (response.ok) {
+        //             const data = await response.json();
+        //             alert(`Merge complete! ${data.original_count} intervals were combined into ${data.merged_count}. The editor will now refresh to the beginning of the new list for review.`);
                     
-                    // Directly update the UI with the new merged intervals from the response
-                    intervals = data.intervals;
-                    originalIntervals = JSON.parse(JSON.stringify(data.intervals)); // Update the pristine copy
+        //             // Directly update the UI with the new merged intervals from the response
+        //             intervals = data.intervals;
+        //             originalIntervals = JSON.parse(JSON.stringify(data.intervals)); // Update the pristine copy
 
-                    // Reset the index to 0 and load the first new interval
-                    currentIntervalIdx = 0;
-                    await loadInterval(currentIntervalIdx);
-                } else {
-                    alert("Failed to merge intervals.");
-                }
-            } catch (e) {
-                alert("An error occurred during merging.");
-                console.error("Merge error:", e);
-            } finally {
-                mergeBtn.disabled = false;
-                mergeBtn.textContent = "Merge Similar Boxes";
-            }
-        };
+        //             // Reset the index to 0 and load the first new interval
+        //             currentIntervalIdx = 0;
+        //             await loadInterval(currentIntervalIdx);
+        //         } else {
+        //             alert("Failed to merge intervals.");
+        //         }
+        //     } catch (e) {
+        //         alert("An error occurred during merging.");
+        //         console.error("Merge error:", e);
+        //     } finally {
+        //         mergeBtn.disabled = false;
+        //         mergeBtn.textContent = "Merge Similar Boxes";
+        //     }
+        // };
 
         mergePrevBtn.onclick = async () => {
             mergePrevBtn.disabled = true;
