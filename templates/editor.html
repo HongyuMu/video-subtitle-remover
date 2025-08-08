@@ -361,8 +361,8 @@
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            // Fetch the raw video frame and then draw the correct box on top
-            await loadFrameImage(interval.frame_range[0], currentBox);
+            // Draw the correct box on top of the current <video> frame
+            redrawCanvas(currentBox);
 
             // Always enable navigation buttons - let the click handlers deal with bounds
             prevBtn.disabled = currentIntervalIdx === 0;
@@ -392,32 +392,21 @@
 
         // --- RENDERING AND PREVIEW ---
 
-        // Fetches a single, clean video frame from the server (with no box drawn on it).
+        // Deprecated: previously used to fetch static frames beneath overlay.
+        // Keeping the function to avoid runtime errors from any leftover calls.
         async function loadFrameImage(frameIdx, boxToDraw) {
-            // Calls the API to get the raw image data
-            const response = await fetch(`/show_subtitle_box/${taskId}?frame_idx=${frameIdx}&draw_box=false`);
-            const imageBlob = await response.blob();
-            // When the image data has loaded into our image object, redraw the canvas.
-            currentImage.onload = () => {
+            try {
                 redrawCanvas(boxToDraw);
-            };
-            currentImage.src = URL.createObjectURL(imageBlob);
+            } catch (err) {
+                console.error('loadFrameImage noop error', err);
+            }
         }
 
-        // This is the core of the real-time preview. It redraws everything on the canvas.
+        // Redraw overlay-only (boxes) using the current <video> frame beneath the canvas.
         function redrawCanvas(box) {
-            // Don't do anything if the image isn't fully loaded yet
-            if (!currentImage.complete || currentImage.naturalWidth === 0) return;
-            
-            // Set the canvas size to match the image's actual size
-            canvas.width = currentImage.naturalWidth;
-            canvas.height = currentImage.naturalHeight;
-            
-            // Clear the canvas and draw the background video frame
+            canvas.width = video.clientWidth;
+            canvas.height = video.clientHeight;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(currentImage, 0, 0);
-            
-            // Draw the green bounding box on top of the video frame
             drawBoundingBox(box);
         }
         
@@ -495,15 +484,23 @@
             const startFrame = parseInt(startFrameInput.value);
             const endFrame = parseInt(endFrameInput.value);
             intervals[currentIntervalIdx].frame_range = [startFrame, endFrame];
-            await fetch(`/adjust_interval/${taskId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    interval_idx: currentIntervalIdx, 
-                    start_frame: startFrame,
-                    end_frame: endFrame
-                })
-            });
+            try {
+                const response = await fetch(`/adjust_interval/${taskId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        interval_idx: currentIntervalIdx, 
+                        start_frame: startFrame,
+                        end_frame: endFrame
+                    })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    console.error('adjust_interval failed', response.status, text);
+                }
+            } catch (err) {
+                console.error('adjust_interval error', err);
+            }
 
             alert(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
             console.log(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
@@ -519,11 +516,19 @@
 
             console.log(`Saving box for interval ${currentIntervalIdx + 1} with coordinates [${box.x}, ${box.x + box.width}, ${box.y}, ${box.y + box.height}]`);
             // Send the new data to the /adjust_box endpoint
-            await fetch(`/adjust_box/${taskId}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ interval_idx: currentIntervalIdx, ...box })
-            });
+            try {
+                const response = await fetch(`/adjust_box/${taskId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ interval_idx: currentIntervalIdx, ...box })
+                });
+                if (!response.ok) {
+                    const text = await response.text().catch(() => '');
+                    console.error('adjust_box failed', response.status, text);
+                }
+            } catch (err) {
+                console.error('adjust_box error', err);
+            }
 
         }
 
@@ -553,7 +558,8 @@
             
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
-                if(activeIdx !== currentIntervalIdx) {
+                if (activeIdx !== currentIntervalIdx) {
+                    console.log(`[Timeline] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${clampedFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
                     loadInterval(activeIdx, true);
                 }
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
@@ -562,6 +568,7 @@
             } else {
                 // Clear canvas if no active interval
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                console.log(`[Timeline] No active interval at frame ${clampedFrame}`);
             }
         };
         
@@ -614,6 +621,17 @@
                 newValue = Math.min(parseInt(timeline.max), currentValue + step);
             }
             setTimelinePosition(newValue);
+
+            // Update current interval selection and log when navigating via keyboard
+            const activeIdx = findActiveInterval(newValue);
+            if (activeIdx !== -1) {
+                if (activeIdx !== currentIntervalIdx) {
+                    console.log(888, `[Timeline] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${newValue} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    loadInterval(activeIdx, true);
+                }
+            } else {
+                console.log(888, `[Timeline] No active interval at frame ${newValue}`);
+            }
         };
 
         // Update timeline when video time changes (e.g., from navigation)
