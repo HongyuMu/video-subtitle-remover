@@ -174,14 +174,14 @@
                     <input type="number" id="x-value" class="value-input">
                 </div>
                 <div class="slider-group">
-                    <label for="y-slider">Y:</label>
-                    <input type="range" id="y-slider" name="y">
-                    <input type="number" id="y-value" class="value-input">
-                </div>
-                <div class="slider-group">
                     <label for="width-slider">Width:</label>
                     <input type="range" id="width-slider" name="width">
                     <input type="number" id="width-value" class="value-input">
+                </div>
+                <div class="slider-group">
+                    <label for="y-slider">Y:</label>
+                    <input type="range" id="y-slider" name="y">
+                    <input type="number" id="y-value" class="value-input">
                 </div>
                 <div class="slider-group">
                     <label for="height-slider">Height:</label>
@@ -438,7 +438,9 @@
 
             const activeIdx = findActiveInterval(currentFrame);
             if (activeIdx !== -1) {
-                if(activeIdx !== currentIntervalIdx && !isUserScrubbing) {
+                // Only auto-switch intervals while video is playing to avoid
+                // fighting with manual navigation (Prev/Next, Split, etc.)
+                if (!video.paused && activeIdx !== currentIntervalIdx && !isUserScrubbing) {
                     loadInterval(activeIdx, true);
                 }
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
@@ -669,9 +671,11 @@
 
         // Attach the navigation functions to the Previous/Next buttons.
         prevBtn.onclick = () => {
+            console.log(`Current Interval`, currentIntervalIdx)
             const newIdx = Math.max(0, currentIntervalIdx - 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
+                console.log(777, `Going to Interval ${newIdx}`)
             } else {
                 // If already at first interval, go to the start of current interval
                 loadInterval(currentIntervalIdx, false, false);
@@ -679,9 +683,11 @@
         };
         
         nextBtn.onclick = () => {
+            console.log(`Current Interval`, currentIntervalIdx)
             const newIdx = Math.min(intervals.length - 1, currentIntervalIdx + 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
+                console.log(777, `Going to Interval ${newIdx}`)
             } else {
                 // If already at last interval, go to the end of current interval
                 loadInterval(currentIntervalIdx, false, true);
@@ -785,7 +791,7 @@
                     
                     // Show detailed success message
                     alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
-                    
+                    console.log(`Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
                     // Load the merged interval and position timeline at the end
                     await loadInterval(newIntervalIdx, false, true);
                 } else {
@@ -829,13 +835,18 @@
                     intervals = data.new_intervals;
                     originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
                     
-                    // Show detailed success message
-                    const firstPart = intervals[currentIntervalIdx];
-                    const secondPart = intervals[currentIntervalIdx + 1];
-                    alert(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    // Compute the index of the newly created second interval
+                    const newSecondIdx = Math.min(intervals.length - 1, currentIntervalIdx + 1);
                     
-                    // Stay on the first part of the split interval and position timeline at the end
-                    await loadInterval(currentIntervalIdx, false, true);
+                    // Show detailed success message and move to the second part for review
+                    const firstPart = intervals[currentIntervalIdx];
+                    const secondPart = intervals[newSecondIdx];
+                    alert(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    console.log(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    console.log("Split complete:", { currentIntervalIdx, newSecondIdx, total: intervals.length });
+                    
+                    // Jump to the start of the newly created second interval
+                    await loadInterval(newSecondIdx, false, false);
                 } else {
                     alert("Failed to split interval.");
                 }
