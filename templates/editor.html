@@ -126,12 +126,17 @@
         }
         button:disabled { background-color: #ccc; cursor: not-allowed; }
         button:hover:not(:disabled) { background-color: #357abd; }
-        #finish-btn { background-color: #28a745; }
-        #finish-btn:hover:not(:disabled) { background-color: #218838; }
-        #merge-btn { background-color: #fd7e14; }
-        #merge-btn:hover:not(:disabled) { background-color: #e86a07; }
-        #reset-btn, #not-sub-btn { background-color: #6c757d; }
-        #reset-btn:hover:not(:disabled), #not-sub-btn:hover:not(:disabled) { background-color: #5a6268; }
+        /* Primary (blue) remains default for most buttons */
+
+        /* Green actions */
+        #finish-btn, #split-interval-btn { background-color: #28a745; }
+        #finish-btn:hover:not(:disabled), #split-interval-btn:hover:not(:disabled) { background-color: #218838; }
+
+        /* Red actions */
+        #reset-btn, #not-sub-btn { background-color: #dc3545; }
+        #reset-btn:hover:not(:disabled), #not-sub-btn:hover:not(:disabled) { background-color: #bb2d3b; }
+
+        /* Keep Use Previous and Merge Previous as blue (default) */
     </style>
 </head>
 <body>
@@ -200,19 +205,16 @@
                     <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
                 </div>
                 <div class="extra-controls">
-                    <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
-                </div>
-                <div class="extra-controls">
                     <button id="not-sub-btn" style="width: 100%;">Not a Subtitle</button>
                 </div>
                 <div class="extra-controls">
-                    <button id="merge-btn" style="width: 100%;">Merge Similar Boxes</button>
+                    <button id="split-interval-btn" style="width: 100%;">Split Current Interval</button>
                 </div>
                 <div class="extra-controls">
                     <button id="merge-prev-btn" style="width: 100%;">Merge with Previous</button>
                 </div>
                 <div class="extra-controls">
-                    <button id="split-interval-btn" style="width: 100%;">Split Current Interval</button>
+                    <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
                 </div>
                 <button id="finish-btn">Finish and Process</button>
             </div>
@@ -693,7 +695,7 @@
             const newIdx = Math.max(0, currentIntervalIdx - 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
-                console.log(777, `Going to Interval ${newIdx}`)
+                console.log(777, `Going to Interval ${newIdx + 1}`)
             } else {
                 // If already at first interval, go to the start of current interval
                 loadInterval(currentIntervalIdx, false, false);
@@ -705,7 +707,7 @@
             const newIdx = Math.min(intervals.length - 1, currentIntervalIdx + 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
-                console.log(777, `Going to Interval ${newIdx}`)
+                console.log(777, `Going to Interval ${newIdx + 1}`)
             } else {
                 // If already at last interval, go to the end of current interval
                 loadInterval(currentIntervalIdx, false, true);
