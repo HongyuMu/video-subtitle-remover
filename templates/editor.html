@@ -322,7 +322,7 @@
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${frame}`;
+            currentFrameDisplay.textContent = `Frame: ${Math.min(frame + 1, timeline.max)}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -344,8 +344,13 @@
             const interval = intervals[idx];
 
             if (!fromTimeline) {
-                const targetFrame = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
-                setTimelinePosition(targetFrame);
+                // interval.frame_range is 1-based inclusive; convert to 0-based for timeline/video
+            const targetFrame1Based = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
+            const targetFrame0Based = Math.max(0, targetFrame1Based - 1);
+            setTimelinePosition(targetFrame0Based);
+            // Keep the displayed inputs consistent with 1-based interval values
+            startFrameInput.value = interval.frame_range[0];
+            endFrameInput.value = interval.frame_range[1];
             }
 
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
@@ -639,9 +644,9 @@
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
             if (video.paused && !isUpdated) {
-                const currentFrame = getCurrentFrame();
-                timeline.value = currentFrame;
-                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                const currentFrame0 = getCurrentFrame();
+                timeline.value = currentFrame0;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame0 + 1}`;
             }
             isUpdated = false;
         };
