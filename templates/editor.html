@@ -291,10 +291,11 @@
                         taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
                     }
                     
-                    // Set timeline max to actual total frames for full video playback
-                    const totalFrames = Math.floor(video.duration * taskInfo.fps);
-                    timeline.max = totalFrames;
-                    timeline.step = parseInt(timelineStepInput.value) || 1;
+                // Set timeline max to actual total frames for full video playback
+                const totalFrames = Math.floor(video.duration * taskInfo.fps);
+                timeline.max = totalFrames;
+                // Keep native slider step at 1 so keyboard logic controls step precisely
+                timeline.step = 1;
                     loadInterval(0);
                     requestAnimationFrame(drawLoop);
                 };
@@ -309,8 +310,10 @@
             return Math.floor(video.currentTime * taskInfo.fps);
         }
 
-        function findActiveInterval(frame) {
-            return intervals.findIndex(i => frame >= i.frame_range[0] && frame <= i.frame_range[1]);
+        // Intervals from server are 1-based inclusive. Convert current 0-based frame to 1-based for comparison.
+        function findActiveInterval(frame0) {
+            const f1 = frame0 + 1;
+            return intervals.findIndex(i => f1 >= i.frame_range[0] && f1 <= i.frame_range[1]);
         }
 
         function setTimelinePosition(frame) {
@@ -319,7 +322,7 @@
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${Math.max(0,frame - 1)}`;
+            currentFrameDisplay.textContent = `Frame: ${frame}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -646,7 +649,7 @@
         startFrameInput.onchange = saveInterval;
         endFrameInput.onchange = saveInterval;
         timelineStepInput.onchange = () => {
-            timeline.step = parseInt(timelineStepInput.value) || 1;
+            // Do not change native slider step; handled in keydown logic
         };
 
         // A function to apply the current step value to all sliders
@@ -862,8 +865,9 @@
                     console.log(`Successfully split interval at frame ${currentFrame}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
                     console.log("Split complete:", { currentIntervalIdx, newSecondIdx, total: intervals.length });
                     
-                    // Jump to the start of the newly created second interval
+                    // Jump to the first frame of the second interval explicitly
                     await loadInterval(newSecondIdx, false, false);
+                    setTimelinePosition(secondPart.frame_range[0]);
                 } else {
                     alert("Failed to split interval.");
                 }
