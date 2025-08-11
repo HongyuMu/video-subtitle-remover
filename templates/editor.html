@@ -317,12 +317,12 @@
         }
 
         function setTimelinePosition(frame) {
-            // Helper function to manually set timeline position
+            // Helper function to manually set timeline position (expects 0-based frame)
             isUserScrubbing = true;
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${Math.min(frame + 1, timeline.max)}`;
+            currentFrameDisplay.textContent = `Frame: ${frame}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -344,13 +344,10 @@
             const interval = intervals[idx];
 
             if (!fromTimeline) {
-                // interval.frame_range is 1-based inclusive; convert to 0-based for timeline/video
-            const targetFrame1Based = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
-            const targetFrame0Based = Math.max(0, targetFrame1Based - 1);
-            setTimelinePosition(targetFrame0Based);
-            // Keep the displayed inputs consistent with 1-based interval values
-            startFrameInput.value = interval.frame_range[0];
-            endFrameInput.value = interval.frame_range[1];
+                // Convert 1-based interval boundary to 0-based timeline frame
+                const boundary1Based = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
+                const boundary0Based = Math.max(0, boundary1Based - 1);
+                setTimelinePosition(boundary0Based);
             }
 
             intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
@@ -376,9 +373,6 @@
             nextBtn.disabled = currentIntervalIdx === intervals.length - 1;
             useLastBtn.disabled = currentIntervalIdx === 0;
 
-            // Disable the general merge button if not the last interval
-            // mergeBtn.disabled = currentIntervalIdx !== intervals.length - 1;
-            // mergeBtn.title = mergeBtn.disabled ? 'You can only merge after adjusting the last interval.' : 'Merge all similar boxes into single intervals.';
             mergePrevBtn.disabled = currentIntervalIdx === 0;
             splitIntervalBtn.disabled = false;
         }
@@ -644,9 +638,9 @@
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
             if (video.paused && !isUpdated) {
-                const currentFrame0 = getCurrentFrame();
-                timeline.value = currentFrame0;
-                currentFrameDisplay.textContent = `Frame: ${currentFrame0 + 1}`;
+                const currentFrame = getCurrentFrame();
+                timeline.value = currentFrame;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
             isUpdated = false;
         };
@@ -766,34 +760,6 @@
             }
         };
 
-        // mergeBtn.onclick = async () => {
-        //     mergeBtn.disabled = true;
-        //     mergeBtn.textContent = "Merging...";
-        //     try {
-        //         const response = await fetch(`/merge_similar_intervals/${taskId}`, { method: 'POST' });
-        //         if (response.ok) {
-        //             const data = await response.json();
-        //             alert(`Merge complete! ${data.original_count} intervals were combined into ${data.merged_count}. The editor will now refresh to the beginning of the new list for review.`);
-                    
-        //             // Directly update the UI with the new merged intervals from the response
-        //             intervals = data.intervals;
-        //             originalIntervals = JSON.parse(JSON.stringify(data.intervals)); // Update the pristine copy
-
-        //             // Reset the index to 0 and load the first new interval
-        //             currentIntervalIdx = 0;
-        //             await loadInterval(currentIntervalIdx);
-        //         } else {
-        //             alert("Failed to merge intervals.");
-        //         }
-        //     } catch (e) {
-        //         alert("An error occurred during merging.");
-        //         console.error("Merge error:", e);
-        //     } finally {
-        //         mergeBtn.disabled = false;
-        //         mergeBtn.textContent = "Merge Similar Boxes";
-        //     }
-        // };
-
         mergePrevBtn.onclick = async () => {
             mergePrevBtn.disabled = true;
             mergePrevBtn.textContent = "Merging...";
@@ -832,14 +798,17 @@
         };
 
         splitIntervalBtn.onclick = async () => {
-            const currentFrame0Based = getCurrentFrame();
-            const currentFrame1Based = currentFrame0Based + 1; // Convert to 1-based for server
+            const currentFrame0 = getCurrentFrame();
+            const currentFrame1 = currentFrame0 + 1;
+            console.log(111, currentFrame1);
             const interval = intervals[currentIntervalIdx];
+            console.log(222, interval);
             const startFrame = interval.frame_range[0];
             const endFrame = interval.frame_range[1];
+            console.log(333, startFrame, endFrame);
             
-            if (currentFrame1Based <= startFrame || currentFrame1Based >= endFrame) {
-                alert(`Please position the timeline within the current interval (frames ${startFrame}-${endFrame}) to split it. Current frame: ${currentFrame1Based}`);
+            if (currentFrame1 <= startFrame || currentFrame1 >= endFrame) {
+                alert(`Please position the timeline within the current interval (frames ${startFrame}-${endFrame}). Current frame: ${currentFrame1}`);
                 return;
             }
             
@@ -851,7 +820,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         interval_idx: currentIntervalIdx,
-                        split_frame: currentFrame1Based
+                        split_frame: currentFrame1
                     })
                 });
                 if (response.ok) {
@@ -867,15 +836,11 @@
                     // Show detailed success message and move to the second part for review
                     const firstPart = intervals[currentIntervalIdx];
                     const secondPart = intervals[newSecondIdx];
-                    alert(`Successfully split interval at frame ${currentFrame1Based}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
-                    console.log(`Successfully split interval at frame ${currentFrame1Based}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
-                    console.log("Split complete:", { currentIntervalIdx, newSecondIdx, total: intervals.length });
-                    
-                    // Jump to the first frame of the second interval explicitly
+                    alert(`Successfully split interval at frame ${currentFrame1}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    console.log(`Successfully split interval at frame ${currentFrame1}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    // Jump to the first frame of the second interval explicitly (convert to 0-based)
                     await loadInterval(newSecondIdx, false, false);
-                    // Convert 1-based frame to 0-based for timeline position
-                    const secondPartStart0Based = Math.max(0, secondPart.frame_range[0] - 1);
-                    setTimelinePosition(secondPartStart0Based);
+                    setTimelinePosition(Math.max(0, secondPart.frame_range[0] - 1));
                 } else {
                     alert("Failed to split interval.");
                 }
