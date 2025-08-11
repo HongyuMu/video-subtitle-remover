@@ -310,10 +310,9 @@
             return Math.floor(video.currentTime * taskInfo.fps);
         }
 
-        // Intervals from server are 1-based inclusive. Convert current 0-based frame to 1-based for comparison.
+        // Intervals from server are 0-based, matching the video's 0-based frame index.
         function findActiveInterval(frame) {
-            const f1 = frame;
-            return intervals.findIndex(i => f1 >= i.frame_range[0] && f1 <= i.frame_range[1]);
+            return intervals.findIndex(i => frame >= i.frame_range[0] && frame <= i.frame_range[1]);
         }
 
         function setTimelinePosition(frame) {
@@ -322,7 +321,7 @@
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${frame}`;
+            currentFrameDisplay.textContent = `Frame: ${Math.max(0, frame - 1)}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -345,9 +344,8 @@
 
             if (!fromTimeline) {
                 const boundary = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
-                setTimelinePosition(boundary);
-                console.log("boundary", boundary);
-                // Keep the displayed inputs consistent with 1-based interval values
+                setTimelinePosition(boundary); // Frame ranges are 0-based, no conversion needed
+                // Keep the displayed inputs consistent with interval values
                 startFrameInput.value = interval.frame_range[0];
                 endFrameInput.value = interval.frame_range[1];
             }
