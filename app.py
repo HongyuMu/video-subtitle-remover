@@ -485,6 +485,10 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
 # Call the SubtitleRemover class to remove subtitles
 def process_video(video_path, json_path, output_path, status_file):
     try:
+        # Immediately write a "Processing" status to the file so the frontend knows work has started.
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Processing..."}, f)
+
         with open(json_path, 'r') as f:
             json_data = json.load(f)
         coords = json_data.get("distinct_coordinates")
@@ -492,11 +496,14 @@ def process_video(video_path, json_path, output_path, status_file):
         sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)       
         sd.run()
         shutil.copy2(sd.video_out_name, output_path)
+
+        # Once successfully completed, update the status file.
         with open(status_file, 'w') as f:
-            f.write("Completed")
+            json.dump({"status": "Completed"}, f)
     except Exception as e:
+        # If an error occurs, record it in the status file.
         with open(status_file, 'w') as f:
-            f.write(f"Error: {e}")
+            json.dump({"status": f"Error: {e}"}, f)
     finally:
         for path in [video_path, json_path]:
             if os.path.exists(path):
@@ -507,10 +514,25 @@ def process_video(video_path, json_path, output_path, status_file):
 async def get_status(status_filename: str):
     status_path = PROCESSED_DIR / status_filename
     if not status_path.exists():
-        return JSONResponse(content={"status": "Not Found"})
-    with open(status_path, 'r') as f:
-        status = f.read().strip()
-    return JSONResponse(content={"status": status})
+        # This is expected before the background task creates the file. Frontend will retry.
+        return JSONResponse(content={"status": "Not Found"}, status_code=404)
+    
+    try:
+        with open(status_path, 'r') as f:
+            content = f.read().strip()
+        
+        if not content:
+            # File is empty, meaning processing is just starting.
+            return JSONResponse(content={"status": "Processing..."})
+        
+        # New format: status file contains a JSON object.
+        status_data = json.loads(content)
+        return JSONResponse(content=status_data)
+    except json.JSONDecodeError:
+        # Backwards compatibility for old format where the file was just a string.
+        return JSONResponse(content={"status": content})
+    except Exception as e:
+        return JSONResponse(content={"status": f"Error reading status file: {e}"}, status_code=500)
 
 
 @app.get("/download_video/{video_filename}", include_in_schema=False)
