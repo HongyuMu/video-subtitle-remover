@@ -667,6 +667,13 @@
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
                 console.log(111, currentFrame);
+                
+                // When paused, if the frame has changed to a new interval, load it.
+                const activeIdx = findActiveInterval(currentFrame);
+                if (activeIdx !== -1 && activeIdx !== currentIntervalIdx) {
+                    console.log(888, `[Video] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    loadInterval(activeIdx, true);
+                }
             }
             isUpdated = false;
         };
