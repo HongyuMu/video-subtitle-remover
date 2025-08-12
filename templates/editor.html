@@ -35,9 +35,13 @@
         .editor-main {
             display: flex;
             gap: 20px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap; /* keep side-by-side */
             justify-content: center;
+            align-items: flex-start;
         }
+        /* Orientation-aware layout (both render horizontally) */
+        .editor-main.landscape, .editor-main.portrait { flex-direction: row; }
+        .preview-container { flex: 1 1 auto; min-width: 360px; max-width: 100%; }
         .preview-container {
             position: relative;
             max-width: 800px;
@@ -81,7 +85,8 @@
             padding: 20px;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-            width: 300px;
+            width: 320px;
+            flex: 0 0 320px; /* fixed sidebar width */
             display: flex;
             flex-direction: column;
             gap: 15px;
@@ -298,6 +303,12 @@
                 // Setup video player
                 video.src = `/stream_video/${taskId}`;
                 video.onloadedmetadata = () => {
+                    // Determine orientation and adjust layout classes
+                    const editorMainEl = document.querySelector('.editor-main');
+                    const isLandscape = video.videoWidth >= video.videoHeight;
+                    editorMainEl.classList.remove('portrait', 'landscape');
+                    editorMainEl.classList.add(isLandscape ? 'landscape' : 'portrait');
+
                     // Get actual video properties
                     taskInfo.fps = video.videoWidth > 0 ? video.getVideoPlaybackQuality().totalVideoFrames / video.duration : 30;
                     if (!taskInfo.fps || isNaN(taskInfo.fps)) {
