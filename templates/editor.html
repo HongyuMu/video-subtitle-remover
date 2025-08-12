@@ -756,8 +756,8 @@
                     // If the last box was marked as "not a subtitle", apply the same state
                     // to the current box and automatically advance to the next one.
                     const nullBox = { x: 0, y: 0, width: 0, height: 0 };
+                    intervals[currentIntervalIdx].coords = [0, 0, 0, 0]; // Update state for drawLoop
                     updateSliderValues(nullBox);
-                    await loadFrameImage(getCurrentFrame(), nullBox);
                     saveBox(nullBox);
                     if (currentIntervalIdx < intervals.length - 1) {
                         loadInterval(currentIntervalIdx + 1);
@@ -770,8 +770,8 @@
                         width: xmax - xmin,
                         height: ymax - ymin
                     };
+                    intervals[currentIntervalIdx].coords = [xmin, xmax, ymin, ymax]; // Update state for drawLoop
                     updateSliderValues(lastBox);
-                    await loadFrameImage(getCurrentFrame(), lastBox);
                     saveBox(lastBox);
                 }
             }
@@ -780,10 +780,10 @@
         notSubBtn.onclick = async () => {
             // Create a "null" box to represent no subtitle
             const nullBox = { x: 0, y: 0, width: 0, height: 0 };
+            intervals[currentIntervalIdx].coords = [0, 0, 0, 0]; // Update state for drawLoop
 
             // Update UI, load the current frame image, redraw the canvas (with no box), and save this state to the server.
             updateSliderValues(nullBox);
-            await loadFrameImage(getCurrentFrame(), nullBox);
             saveBox(nullBox);
 
             alert('This interval has been marked as "Not a Subtitle" and will be skipped.');
