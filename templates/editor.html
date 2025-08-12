@@ -518,18 +518,25 @@
                         end_frame: endFrame
                     })
                 });
-                if (!response.ok) {
-                    const text = await response.text().catch(() => '');
-                    console.error('adjust_interval failed', response.status, text);
+                const data = await response.json();
+                if (response.ok) {
+                    // The backend now returns the full updated list of intervals
+                    intervals = data.new_intervals;
+                    originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
+                    alert(data.message); // Show the more informative message from the server
+                    
+                    // The indices might have changed, so we reload the current interval to be safe
+                    loadInterval(currentIntervalIdx);
+                } else {
+                    // If the backend returns an error (e.g., collision), show it to the user.
+                    alert(`Error: ${data.detail || 'Could not save interval.'}`);
+                    // Revert local changes to match the server state
+                    initializeEditor();
                 }
             } catch (err) {
                 console.error('adjust_interval error', err);
+                alert('An error occurred while saving the interval.');
             }
-
-            alert(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
-            console.log(`Interval ${currentIntervalIdx + 1} has been updated to be [${startFrame}, ${endFrame}]`);
-            // Update the interval info display after saving
-            intervalInfo.textContent = `Editing Interval ${currentIntervalIdx + 1} / ${intervals.length} (Frames ${startFrame}-${endFrame})`;
         }
 
 

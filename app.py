@@ -561,26 +561,59 @@ class AdjustIntervalRequest(BaseModel):
 
 @app.post("/adjust_interval/{task_id}", include_in_schema=False)
 async def adjust_interval(task_id: str, req: AdjustIntervalRequest):
-    """Adjusts the start and end frame for a specific interval."""
+    """
+    Adjusts the start and end frame for a specific interval and updates its neighbors
+    to prevent any overlap.
+    """
     result = TASK_RESULTS.get(task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
 
     frame_intervals = result.get("frame_intervals", [])
+    distinct_coords = result.get("distinct_coords", [])
+
     if not (0 <= req.interval_idx < len(frame_intervals)):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
-    # Basic validation
-    if req.start_frame < 0 or req.end_frame < req.start_frame:
-         raise HTTPException(status_code=400, detail="Invalid frame range")
+    idx = req.interval_idx
+    new_start = req.start_frame
+    new_end = req.end_frame
 
-    # Update the interval
-    frame_intervals[req.interval_idx] = (req.start_frame, req.end_frame)
+    # Basic validation
+    if new_start < 0 or new_end < new_start:
+         raise HTTPException(status_code=400, detail="Invalid frame range: end must be after start.")
+
+    # Adjust previous interval, if it exists
+    if idx > 0:
+        prev_start, _ = frame_intervals[idx - 1]
+        new_prev_end = new_start - 1
+        if new_prev_end < prev_start:
+            raise HTTPException(status_code=400, detail=f"Change invalid: start frame collides with previous interval.")
+        frame_intervals[idx - 1] = (prev_start, new_prev_end)
+        
+    # Adjust next interval, if it exists
+    if idx < len(frame_intervals) - 1:
+        _, next_end = frame_intervals[idx + 1]
+        new_next_start = new_end + 1
+        if new_next_start > next_end:
+            raise HTTPException(status_code=400, detail=f"Change invalid: end frame collides with next interval.")
+        frame_intervals[idx + 1] = (new_next_start, next_end)
+
+    # Finally, update the current interval
+    frame_intervals[idx] = (new_start, new_end)
+    
     TASK_RESULTS[task_id]["frame_intervals"] = frame_intervals
 
     return {
-        "message": f"Interval {req.interval_idx} adjusted successfully.",
-        "new_interval": (req.start_frame, req.end_frame)
+        "message": f"Interval {idx + 1} and its neighbors were adjusted successfully.",
+        "new_intervals": [
+            {
+                "interval_idx": i,
+                "frame_range": interval,
+                "coords": coords
+            }
+            for i, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+        ]
     }
 
 
