@@ -311,13 +311,16 @@
 
                     // Get actual video properties
                     taskInfo.fps = video.videoWidth > 0 ? video.getVideoPlaybackQuality().totalVideoFrames / video.duration : 30;
+                    console.log(`[Video FPS]`, taskInfo.fps);
+                    console.log(`[Video duration]`, video.duration);
+                    console.log(`[Actual total frames]`, intervals[intervals.length-1].frame_range[1]);
                     if (!taskInfo.fps || isNaN(taskInfo.fps)) {
-                        taskInfo.fps = intervals.length > 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
+                        taskInfo.fps = intervals.length >= 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
                     }
+                    console.log(`[FPS from calculation]`, taskInfo.fps);
                     
                 // Set timeline max to actual total frames for full video playback
-                const totalFrames = Math.floor(video.duration * taskInfo.fps);
-                timeline.max = totalFrames;
+                timeline.max = intervals[intervals.length-1].frame_range[1];
                 // Keep native slider step at 1 so keyboard logic controls step precisely
                 timeline.step = 1;
                     loadInterval(0);
@@ -555,7 +558,7 @@
         async function saveBox(box) {
             // The local 'intervals' array is updated directly in handleSliderInput.
             // This function is now only responsible for sending the final state to the server.
-            console.log(`Saving box for interval ${currentIntervalIdx + 1} with coordinates [${box.x}, ${box.x + box.width}, ${box.y}, ${box.y + box.height}]`);
+            console.log(`[SaveBox]`, `Saving box for interval ${currentIntervalIdx + 1} with coordinates [${box.x}, ${box.x + box.width}, ${box.y}, ${box.y + box.height}]`);
             // Send the new data to the /adjust_box endpoint
             try {
                 const response = await fetch(`/adjust_box/${taskId}`, {
@@ -596,11 +599,10 @@
             
             // Force immediate redraw when manually scrubbing
             currentFrameDisplay.textContent = `Frame: ${clampedFrame - 1}`;
-            console.log(222, clampedFrame);
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
-                    console.log(`[Timeline] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${clampedFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    console.log(`[Timeline]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${clampedFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
                     loadInterval(activeIdx, true);
                 }
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
@@ -609,7 +611,7 @@
             } else {
                 // Clear canvas if no active interval
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                console.log(`[Timeline] No active interval at frame ${clampedFrame}`);
+                console.log(`[Timeline]`, `No active interval at frame ${clampedFrame}`);
             }
         };
         
@@ -651,7 +653,7 @@
             const currentValue = parseInt(timeline.value);
             // Ensure step is always valid - get from input first, then timeline.step, then default to 1
             const step = parseInt(timelineStepInput.value) || parseInt(timeline.step) || 1;
-            console.log(999,step);
+            console.log(`[StepSize]`,step);
             let newValue = currentValue;
             
             if (e.key === 'ArrowLeft') {
@@ -667,11 +669,11 @@
             const activeIdx = findActiveInterval(newValue);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
-                    console.log(888, `[Timeline] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${newValue} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    console.log(`[Keyboard]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${newValue} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
                     loadInterval(activeIdx, true);
                 }
             } else {
-                console.log(888, `[Timeline] No active interval at frame ${newValue}`);
+                console.log(`[Keyboard]`, `No active interval at frame ${newValue}`);
             }
         };
 
@@ -684,12 +686,12 @@
                 const currentFrame = getCurrentFrame();
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
-                console.log(111, currentFrame);
+                console.log(`[Video]`, currentFrame);
                 
                 // When paused, if the frame has changed to a new interval, load it.
                 const activeIdx = findActiveInterval(currentFrame);
                 if (activeIdx !== -1 && activeIdx !== currentIntervalIdx) {
-                    console.log(888, `[Video] Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
                     loadInterval(activeIdx, true);
                 }
             }
@@ -745,7 +747,7 @@
             const newIdx = Math.max(0, currentIntervalIdx - 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
-                console.log(777, `Going to Interval ${newIdx + 1}`)
+                console.log(`[Prev]`, `Going to Interval ${newIdx + 1}`)
             } else {
                 // If already at first interval, go to the start of current interval
                 loadInterval(currentIntervalIdx, false, false);
@@ -757,7 +759,7 @@
             const newIdx = Math.min(intervals.length - 1, currentIntervalIdx + 1);
             if (newIdx !== currentIntervalIdx) {
                 loadInterval(newIdx);
-                console.log(777, `Going to Interval ${newIdx + 1}`)
+                console.log(`[Next]`, `Going to Interval ${newIdx + 1}`)
             } else {
                 // If already at last interval, go to the end of current interval
                 loadInterval(currentIntervalIdx, false, true);
@@ -833,7 +835,7 @@
                     
                     // Show detailed success message
                     alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
-                    console.log(`Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
+                    console.log(`[Merge]`, `Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
                     // Load the merged interval and position timeline at the end
                     await loadInterval(newIntervalIdx, false, true);
                 } else {
@@ -891,7 +893,7 @@
                     const firstPart = intervals[currentIntervalIdx];
                     const secondPart = intervals[newSecondIdx];
                     alert(`Successfully split the interval. The new intervals are: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
-                    console.log(`Successfully split interval. New intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    console.log(`[Split]`, `Successfully split interval. New intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
 
                     // Jump to the first frame of the second interval
                     await loadInterval(newSecondIdx, false, false);
@@ -916,7 +918,7 @@
                     if (!response.ok) {
                         // If status file not found yet, just wait for it to be created.
                         if (response.status === 404) {
-                            console.log("Status file not available yet, waiting...");
+                            console.log(`[Status]`, "Status file not available yet, waiting...");
                             return;
                         }
                         throw new Error(`Status check failed: ${response.statusText}`);
