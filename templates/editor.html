@@ -234,6 +234,15 @@
         let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
         let isUpdated = false;
 
+        // Helper function to disable controls during async operations like seeking
+        function setControlsDisabled(disabled) {
+            for (const key in sliders) {
+                sliders[key].disabled = disabled;
+                values[key].disabled = disabled;
+            }
+            stepInput.disabled = disabled;
+        }
+
         // Get references to all the HTML elements we will interact with
         const video = document.getElementById('video-player');
         const timeline = document.getElementById('timeline-slider');
@@ -281,6 +290,10 @@
                 taskInfo = infoData;
                 
                 updateSliderSteps();
+
+                // Event handlers to manage control state during seeking ---
+                video.onseeking = () => setControlsDisabled(true);
+                video.onseeked = () => setControlsDisabled(false);
                 
                 // Setup video player
                 video.src = `/stream_video/${taskId}`;
@@ -321,7 +334,7 @@
             isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${Math.max(0, frame - 1)}`;
+            currentFrameDisplay.textContent = `Frame: ${frame}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -426,20 +439,30 @@
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
 
-            const activeIdx = findActiveInterval(currentFrame);
-            if (activeIdx !== -1) {
-                // Only auto-switch intervals while video is playing to avoid
-                // fighting with manual navigation (Prev/Next, Split, etc.)
-                if (!video.paused && activeIdx !== currentIntervalIdx && !isUserScrubbing) {
-                    loadInterval(activeIdx, true);
-                }
-                const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
-                const box = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
-                drawBoundingBox(box);
+            let boxToDraw = null;
+
+            if (video.paused && intervals[currentIntervalIdx]) {
+                // When paused, we are explicitly editing the current interval. Draw its box.
+                const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
+                boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
             } else {
-                // Clear canvas if no active interval
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // When playing, find the active interval based on the current frame.
+                const activeIdx = findActiveInterval(currentFrame);
+                if (activeIdx !== -1) {
+                    // Only auto-switch intervals while video is playing to avoid
+                    // fighting with manual navigation (Prev/Next, Split, etc.)
+                    if (activeIdx !== currentIntervalIdx && !isUserScrubbing) {
+                        loadInterval(activeIdx, true);
+                    }
+                    const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
+                    boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                }
             }
+
+            if (boxToDraw) {
+                drawBoundingBox(boxToDraw);
+            }
+
             requestAnimationFrame(drawLoop);
         }
 
@@ -464,11 +487,11 @@
                 values[key].value = box[key];
             }
             
-            // Redraw immediately for feedback
-            canvas.width = video.clientWidth;
-            canvas.height = video.clientHeight;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            drawBoundingBox(box);
+            // Directly update the coordinates in our local state. The `drawLoop` will
+            // immediately reflect this change on the next frame, creating a single source of truth.
+            if (intervals[currentIntervalIdx]) {
+                intervals[currentIntervalIdx].coords = [box.x, box.x + box.width, box.y, box.y + box.height];
+            }
 
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(() => {
@@ -512,9 +535,8 @@
 
         // Sends the updated box coordinates to the server to be stored.
         async function saveBox(box) {
-            // Update the coordinates in our local 'intervals' array first
-            intervals[currentIntervalIdx].coords = [box.x, box.x + box.width, box.y, box.y + box.height];
-
+            // The local 'intervals' array is updated directly in handleSliderInput.
+            // This function is now only responsible for sending the final state to the server.
             console.log(`Saving box for interval ${currentIntervalIdx + 1} with coordinates [${box.x}, ${box.x + box.width}, ${box.y}, ${box.y + box.height}]`);
             // Send the new data to the /adjust_box endpoint
             try {
@@ -555,8 +577,8 @@
             video.currentTime = clampedFrame / taskInfo.fps;
             
             // Force immediate redraw when manually scrubbing
-            currentFrameDisplay.textContent = `Frame: ${clampedFrame}`;
-            
+            currentFrameDisplay.textContent = `Frame: ${clampedFrame + 1}`;
+            console.log(`clampedFrame`, clampedFrame);
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
@@ -799,15 +821,19 @@
 
         splitIntervalBtn.onclick = async () => {
             const currentFrame0 = getCurrentFrame();
-            console.log(111, currentFrame0);
+            
+            // The user intends to split *after* the current frame.
+            // The backend's `split_frame` parameter defines the *start* of the second new interval.
+            // Therefore, we must send the index of the next frame.
+            const splitFrame = currentFrame0 + 1;
+
             const interval = intervals[currentIntervalIdx];
-            console.log(222, interval);
             const startFrame = interval.frame_range[0];
             const endFrame = interval.frame_range[1];
-            console.log(333, startFrame, endFrame);
             
-            if (currentFrame0 < startFrame || currentFrame0 >= endFrame) {
-                alert(`Please position the timeline within the current interval (frames ${startFrame}-${endFrame}, exclusive of the last frame). Current frame: ${currentFrame0}`);
+            // Ensure the split point is valid (not on the first or last frame of the interval)
+            if (splitFrame <= startFrame || splitFrame >= endFrame) {
+                alert(`Please position the timeline within the current interval (frames ${startFrame}-${endFrame}), but not on the very first or last frame.`);
                 return;
             }
             
@@ -819,7 +845,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         interval_idx: currentIntervalIdx,
-                        split_frame: currentFrame0
+                        split_frame: splitFrame 
                     })
                 });
                 if (response.ok) {
@@ -835,7 +861,8 @@
                     // Show detailed success message and move to the second part for review
                     const firstPart = intervals[currentIntervalIdx];
                     const secondPart = intervals[newSecondIdx];
-                    alert(`Successfully split interval at frame ${currentFrame0}. Created two intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    alert(`Successfully split the interval. The new intervals are: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    console.log(`Successfully split interval. New intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
 
                     // Jump to the first frame of the second interval
                     await loadInterval(newSecondIdx, false, false);
