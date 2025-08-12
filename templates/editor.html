@@ -577,8 +577,8 @@
             video.currentTime = clampedFrame / taskInfo.fps;
             
             // Force immediate redraw when manually scrubbing
-            currentFrameDisplay.textContent = `Frame: ${clampedFrame + 1}`;
-            console.log(`clampedFrame`, clampedFrame);
+            currentFrameDisplay.textContent = `Frame: ${clampedFrame - 1}`;
+            console.log(222, clampedFrame);
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
@@ -659,10 +659,14 @@
 
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
-            if (video.paused && !isUpdated) {
+            // Do not sync timeline from video while the user is actively scrubbing,
+            // as this can cause floating point rounding errors that make the timeline jump.
+            // Let the user's input be the source of truth during the scrub.
+            if (video.paused && !isUpdated && !isUserScrubbing) {
                 const currentFrame = getCurrentFrame();
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                console.log(111, currentFrame);
             }
             isUpdated = false;
         };
