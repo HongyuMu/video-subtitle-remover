@@ -65,7 +65,7 @@ class SubtitleDetect:
                 coordinate_list.append((xmin, xmax, ymin, ymax))
         return coordinate_list
 
-    def find_subtitle_frame_no(self, sub_remover=None):
+    def find_subtitle_frame_no(self, sub_remover=None, status_file_path: str = None):
         video_cap = cv2.VideoCapture(self.video_path)
         frame_count = video_cap.get(cv2.CAP_PROP_FRAME_COUNT)
         tbar = tqdm(total=int(frame_count), unit='frame', position=0, file=sys.__stdout__, desc='Subtitle Finding')
@@ -96,6 +96,14 @@ class SubtitleDetect:
                 if len(temp_list) > 0:
                     subtitle_frame_no_box_dict[current_frame_no] = temp_list
             tbar.update(1)
+            # write progress to status file for frontend polling
+            if status_file_path:
+                try:
+                    progress_pct = int((current_frame_no / frame_count) * 100)
+                    with open(status_file_path, 'w') as f:
+                        json.dump({"status": "Detecting...", "progress": progress_pct}, f)
+                except Exception:
+                    pass
             if sub_remover:
                 sub_remover.progress_total = (100 * float(current_frame_no) / float(frame_count)) // 2
         subtitle_frame_no_box_dict = self.unify_regions(subtitle_frame_no_box_dict)
@@ -111,6 +119,12 @@ class SubtitleDetect:
         #             pass
         #     subtitle_frame_no_box_dict = self.prevent_missed_detection(subtitle_frame_no_box_dict)
         print('[Finished] Finished finding subtitles...')
+        if status_file_path:
+            try:
+                with open(status_file_path, 'w') as f:
+                    json.dump({"status": "Detection Completed", "progress": 100}, f)
+            except Exception:
+                pass
         new_subtitle_frame_no_box_dict = dict()
         for key in subtitle_frame_no_box_dict.keys():
             if len(subtitle_frame_no_box_dict[key]) > 0:
@@ -650,6 +664,11 @@ class SubtitleRemover:
         self.preview_frame = None
         # 是否将原音频嵌入到去除字幕后的视频
         self.is_successful_merged = False
+        # Optional: external status file to write progress for frontend polling
+        self.status_file_path = None
+        # Track inpainting progress explicitly when available
+        self.total_inpaint_frames = None
+        self.processed_inpaint_frames = 0
 
     @staticmethod
     def get_coordinates(dt_box):
@@ -694,10 +713,39 @@ class SubtitleRemover:
         return -1
 
     def update_progress(self, tbar, increment):
-        tbar.update(increment)
-        current_percentage = (tbar.n / tbar.total) * 100
-        self.progress_remover = int(current_percentage) // 2
-        self.progress_total = 50 + self.progress_remover
+        # Prefer explicit inpainting progress if configured
+        percent = None
+        if self.total_inpaint_frames is not None and self.total_inpaint_frames > 0:
+            try:
+                self.processed_inpaint_frames += int(increment)
+                if self.processed_inpaint_frames < 0:
+                    self.processed_inpaint_frames = 0
+                if self.processed_inpaint_frames > self.total_inpaint_frames:
+                    self.processed_inpaint_frames = self.total_inpaint_frames
+                percent = int((self.processed_inpaint_frames / self.total_inpaint_frames) * 100)
+            except Exception:
+                percent = None
+        # Fallback to tqdm-based percentage if no explicit plan
+        if percent is None and tbar is not None and tbar.total:
+            try:
+                tbar.update(increment)
+                percent = int((tbar.n / tbar.total) * 100)
+            except Exception:
+                percent = None
+        # Keep legacy fields for compatibility with any consumers
+        if percent is not None:
+            self.progress_total = percent
+            self.progress_remover = percent
+        # Optionally write progress to status file
+        if self.status_file_path:
+            try:
+                payload = {"status": "Processing..."}
+                if percent is not None:
+                    payload["progress"] = int(percent)
+                with open(self.status_file_path, 'w') as f:
+                    json.dump(payload, f)
+            except Exception:
+                pass
 
     def propainter_mode(self, tbar):
         print('use propainter mode')

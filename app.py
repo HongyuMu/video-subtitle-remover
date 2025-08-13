@@ -180,7 +180,12 @@ async def find_subtitles(
         
         # Detect subtitle locations and intervals
         subtitle_detect = SubtitleDetect(video_path=temp_video_path)
-        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no()
+        # Create a temporary status file for detection progress
+        detection_status_file = PROCESSED_DIR / f"detect_{uuid.uuid4().hex}.status"
+        # Initialize status
+        with open(detection_status_file, 'w') as f:
+            json.dump({"status": "Detecting...", "progress": 0}, f)
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=str(detection_status_file))
         if not subtitle_frame_no_box_dict:
             raise HTTPException(status_code=404, detail="No subtitles found in the video.")
 
@@ -248,7 +253,12 @@ async def find_subtitles(
             "timestamp": time.time(),
             "user_id": user_id,
         }
-        return {"task_id": task_id, "user_id": user_id, "editor_url": editor_url}
+        return {
+            "task_id": task_id,
+            "user_id": user_id,
+            "editor_url": editor_url,
+            "detect_status_url": f"/status/{detection_status_file.name}"
+        }
 
     except Exception as e:
         print("Error in find_subtitles: ", e)
@@ -503,7 +513,12 @@ def process_video(video_path, json_path, output_path, status_file):
             json_data = json.load(f)
         coords = json_data.get("distinct_coordinates")
         intervals = json_data.get("frame_intervals")
-        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)       
+        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
+        # Let the remover write incremental progress into the same status file
+        try:
+            sd.status_file_path = str(status_file)
+        except Exception:
+            pass
         sd.run()
         shutil.copy2(sd.video_out_name, output_path)
 
