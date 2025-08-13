@@ -955,24 +955,26 @@
 
         // This function is called when the user clicks the "Finish and Process" button.
         finishBtn.onclick = async () => {
-            finishBtn.disabled = true;
-            finishBtn.textContent = "Processing...";
-            try {
-                // Tell the server to start the final video processing job
-                const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
-                if (response.ok) {
-                    const data = await response.json();
-                    alert("Processing started! This may take a few minutes. Your download will begin automatically when it's ready.");
-                    pollStatus(data.status_url, data.download_url);
-                } else {
-                    alert("Failed to start processing.");
+            if (confirm("Once you confirm, you cannot make any changes to the video. Are you sure you want to proceed?")) {
+                finishBtn.disabled = true;
+                finishBtn.textContent = "Processing...";
+                try {
+                    // Tell the server to start the final video processing job
+                    const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
+                    if (response.ok) {
+                        const data = await response.json();
+                        alert("Processing started! This may take a few minutes. Your download will begin automatically when it's ready.");
+                        pollStatus(data.status_url, data.download_url);
+                    } else {
+                        alert("Failed to start processing.");
+                        finishBtn.disabled = false;
+                        finishBtn.textContent = "Finish and Process";
+                    }
+                } catch (e) {
+                    alert("An error occurred while starting the process.");
                     finishBtn.disabled = false;
                     finishBtn.textContent = "Finish and Process";
                 }
-            } catch (e) {
-                alert("An error occurred while starting the process.");
-                finishBtn.disabled = false;
-                finishBtn.textContent = "Finish and Process";
             }
         };
 
