@@ -152,6 +152,16 @@
             <div class="preview-container">
                 <video id="video-player" controls></video>
                 <canvas id="preview-canvas"></canvas>
+                <div id="processing-overlay" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.6); color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:12px;">
+                    <div style="font-size:18px; text-align:center; max-width:90%;">
+                        Your video is being processed. You can continue to browse, but edits are locked. After processing, a new video file will be generated for download.
+                    </div>
+                    <div id="processing-stage" style="font-size:16px;">Stage: Preparing</div>
+                    <div style="width:80%; max-width:520px; background:#222; height:10px; border-radius:6px; overflow:hidden;">
+                        <div id="processing-bar" style="height:100%; width:0%; background:#4a90e2;"></div>
+                    </div>
+                    <div id="processing-percent" style="font-size:14px;">0%</div>
+                </div>
             </div>
             <div class="controls">
                 <div class="timeline-container">
@@ -1081,6 +1091,11 @@
 
         function pollStatus(statusUrl, downloadUrl) {
             finishBtn.textContent = "Processing...";
+            const overlay = document.getElementById('processing-overlay');
+            const bar = document.getElementById('processing-bar');
+            const pct = document.getElementById('processing-percent');
+            const stageEl = document.getElementById('processing-stage');
+            overlay.style.display = 'flex';
             const intervalId = setInterval(async () => {
                 try {
                     const response = await fetch(statusUrl);
@@ -1095,9 +1110,16 @@
                     const data = await response.json();
                     if (data.progress !== undefined) {
                         finishBtn.textContent = `Processing... ${data.progress}%`;
+                        bar.style.width = `${Math.max(0, Math.min(100, data.progress))}%`;
+                        pct.textContent = `${data.progress}%`;
+                    }
+                    if (data.stage) {
+                        const stageLabel = data.stage === 'inpaint' ? 'Inpainting frames' : (data.stage === 'write' ? 'Writing video' : 'Processing');
+                        stageEl.textContent = `Stage: ${stageLabel}`;
                     }
                     if (data.status === "Completed") {
                         clearInterval(intervalId);
+                        overlay.style.display = 'none';
                         finishBtn.textContent = "Download Ready!";
                         alert("Processing complete! Your download is starting.");
                         window.location.href = downloadUrl;
@@ -1108,6 +1130,7 @@
                         }, 5000);
                     } else if (data.status && data.status.startsWith("Error:")) {
                         clearInterval(intervalId);
+                        overlay.style.display = 'none';
                         alert(`Processing failed: ${data.status}`);
                         finishBtn.disabled = false;
                         finishBtn.textContent = "Finish and Process";
@@ -1115,6 +1138,7 @@
                 } catch (error) {
                     console.error("Polling error:", error);
                     clearInterval(intervalId);
+                    overlay.style.display = 'none';
                     alert("An error occurred while checking the processing status. Please check the console for details.");
                     finishBtn.disabled = false;
                     finishBtn.textContent = "Finish and Process";

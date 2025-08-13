@@ -365,8 +365,7 @@ class STTNVideoInpaint:
                 # Configure explicit progress tracking on the remover (if provided)
                 if input_sub_remover is not None:
                     total_to_inpaint = sum(len(frames) for frames in interval_batches)
-                    input_sub_remover.total_inpaint_frames = total_to_inpaint
-                    input_sub_remover.processed_inpaint_frames = 0
+                    input_sub_remover.set_stage('inpaint', total_to_inpaint)
                 for idx, (frames_to_inpaint, valid_indices) in enumerate(zip(interval_batches, interval_indices)):
                     if not frames_to_inpaint:
                         continue
@@ -425,6 +424,8 @@ class STTNVideoInpaint:
 
             # Now, write all frames in original order, using inpainted frames where available
             # This ensures the output video has the same frame order as the input video
+            if input_sub_remover is not None:
+                input_sub_remover.set_stage('write', total_frames)
             for i in range(total_frames):
                 if all_frames[i] is None:
                     if show_tqdm:
