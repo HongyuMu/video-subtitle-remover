@@ -360,6 +360,11 @@ class STTNVideoInpaint:
             inpainted_dict = {}
             frames_processed = 0
             if self.subtitle_areas is not None and self.frame_intervals is not None:
+                # Configure explicit progress tracking on the remover (if provided)
+                if input_sub_remover is not None:
+                    total_to_inpaint = sum(len(frames) for frames in interval_batches)
+                    input_sub_remover.total_inpaint_frames = total_to_inpaint
+                    input_sub_remover.processed_inpaint_frames = 0
                 for idx, (frames_to_inpaint, valid_indices) in enumerate(zip(interval_batches, interval_indices)):
                     if not frames_to_inpaint:
                         continue
@@ -409,7 +414,11 @@ class STTNVideoInpaint:
                             # if frame is not processed, use original frame
                             print(f"[WARNING] Frame {i_frame} not processed - using original frame")
                             inpainted_dict[i_frame] = all_frames[i_frame]
-                    frames_processed += len(valid_indices)
+                    frames_in_interval = len(valid_indices)
+                    frames_processed += frames_in_interval
+                    # Update real progress based on inpainted frames, not final writing
+                    if input_sub_remover is not None:
+                        input_sub_remover.update_progress(tbar, increment=frames_in_interval)
                     print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 
             # Now, write all frames in original order, using inpainted frames where available
@@ -425,8 +434,7 @@ class STTNVideoInpaint:
                     frame = all_frames[i]
                 writer.write(frame)
                 if input_sub_remover is not None:
-                    if tbar is not None:
-                        input_sub_remover.update_progress(tbar, increment=1)
+                    # Do not update user-facing progress during final write; that is covered by inpaint progress above
                     if input_sub_remover.gui_mode:
                         input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
                 if show_tqdm:

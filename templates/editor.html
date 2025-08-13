@@ -1088,6 +1088,9 @@
                         throw new Error(`Status check failed: ${response.statusText}`);
                     }
                     const data = await response.json();
+                    if (data.progress !== undefined) {
+                        finishBtn.textContent = `Processing... ${data.progress}%`;
+                    }
                     if (data.status === "Completed") {
                         clearInterval(intervalId);
                         finishBtn.textContent = "Download Ready!";
@@ -1103,13 +1106,6 @@
                         alert(`Processing failed: ${data.status}`);
                         finishBtn.disabled = false;
                         finishBtn.textContent = "Finish and Process";
-                    } else {
-                        // Still processing, show progress in button text
-                        if (finishBtn.textContent.length > 20) {
-                           finishBtn.textContent = "Processing...";
-                        } else {
-                           finishBtn.textContent += ".";
-                        }
                     }
                 } catch (error) {
                     console.error("Polling error:", error);
