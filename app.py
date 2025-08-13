@@ -38,24 +38,22 @@ PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 TASK_RESULTS = {}
 
 def check_memory_usage():
-    """Check current memory usage and warn if approaching limits"""
+    """Check current system memory usage and warn if it's high."""
     try:
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        memory_mb = memory_info.rss / 1024 / 1024
+        # Get system-wide memory usage
+        virtual_memory = psutil.virtual_memory()
+        memory_percent = virtual_memory.percent
         
-        # Assume 4096MB limit
-        memory_limit_mb = 4096
-        memory_percentage = (memory_mb / memory_limit_mb) * 100
+        print(f"System memory usage: {memory_percent:.1f}%")
         
-        print(f"Memory usage: {memory_mb:.1f}MB ({memory_percentage:.1f}%)")
+        if memory_percent > 90:
+            print(f"WARNING: System memory usage is high at {memory_percent:.1f}%")
         
-        if memory_percentage > 80:
-            print(f"WARNING: Memory usage at {memory_percentage:.1f}%")
-            return False
-        return True
-    except Exception:
-        # If psutil not available, continue
+        return memory_percent < 90
+            
+    except Exception as e:
+        # If psutil not available or fails, just print a note and continue
+        print(f"Could not check system memory: {e}")
         return True
 
 def cleanup_tasks(user_id: Optional[str] = None, all_old: bool = False):
@@ -78,36 +76,48 @@ def cleanup_tasks(user_id: Optional[str] = None, all_old: bool = False):
             if current_time - result.get('timestamp', current_time) > max_age
         ]
 
-    cleaned_count = 0
+    cleaned_files = []
     for task_id in tasks_to_remove:
         result = TASK_RESULTS.pop(task_id, None)
         if result:
-            video_path = result.get('video_path')
-            if video_path and os.path.exists(video_path):
-                try:
-                    os.remove(video_path)
-                except OSError as e:
-                    print(f"Error removing file {video_path}: {e}")
-            cleaned_count += 1
+            original_stem = result.get("original_filename", "unknown")
+            # Define all possible temporary files
+            paths_to_check = [
+                result.get('video_path'),
+                PROCESSED_DIR / f"processed_{original_stem}.mp4",
+                PROCESSED_DIR / f"{original_stem}.status",
+                PROCESSED_FILES_DIR / f"{original_stem}_sub.json"
+            ]
+            for path in paths_to_check:
+                if path and os.path.exists(path):
+                    try:
+                        os.remove(path)
+                        cleaned_files.append(str(path))
+                    except OSError as e:
+                        print(f"Error removing file {path}: {e}")
     
-    if cleaned_count > 0:
-        print(f"Cleaned up {cleaned_count} tasks.")
-    
-    return cleaned_count
+    return len(tasks_to_remove), cleaned_files
 
-class CleanupRequest(BaseModel):
-    user_id: str
-
-@app.post("/cleanup")
-async def manual_cleanup(request: CleanupRequest):
+@app.post("/cleanup/{user_id}")
+async def manual_cleanup(user_id: str):
     """
     Manually triggers cleanup for a specific user's tasks.
     """
-    cleaned_count = cleanup_tasks(user_id=request.user_id)
+    print(f"Starting cleanup for user: {user_id}")
+    cleaned_count, cleaned_files = cleanup_tasks(user_id=user_id)
+    
     if cleaned_count > 0:
-        return {"message": f"Successfully cleaned up {cleaned_count} tasks for user {request.user_id}."}
+        response_message = f"Successfully cleaned up {cleaned_count} tasks and associated files for user {user_id}."
+        print(response_message)
+        if cleaned_files:
+            print("Removed files:")
+            for f in cleaned_files:
+                print(f" - {f}")
+        return {"message": response_message, "cleaned_files": cleaned_files}
     else:
-        return {"message": f"No tasks found to clean up for user {request.user_id}."}
+        response_message = f"No tasks found to clean up for user {user_id}."
+        print(response_message)
+        return {"message": response_message}
 
 
 def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
