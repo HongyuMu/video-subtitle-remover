@@ -61,7 +61,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: none;
+            pointer-events: auto;
         }
                  .timeline-container {
              width: 100%;
@@ -166,16 +166,7 @@
                     <label>Start Frame: <input type="number" id="start-frame-input"></label>
                     <label>End Frame: <input type="number" id="end-frame-input"></label>
                 </div>
-
-                <div class="instructions">
-                    <p><b>How to adjust:</b></p>
-                    <ul>
-                        <li><b>Move Up/Down:</b> Decrease/Increase Y</li>
-                        <li><b>Move Left/Right:</b> Decrease/Increase X</li>
-                        <li><b>Shrink/Grow Vertically:</b> Decrease/Increase Height</li>
-                        <li><b>Shrink/Grow Horizontally:</b> Decrease/Increase Width</li>
-                    </ul>
-                </div>
+                
                 <div class="slider-group">
                     <label for="x-slider">X:</label>
                     <input type="range" id="x-slider" name="x">
@@ -485,6 +476,150 @@
             ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
         }
         
+        // --- MOUSE INTERACTION: DRAG/RESIZE BOX ---
+        const EDGE_MARGIN = 8; // pixels on canvas space
+        let isMouseDown = false;
+        let dragMode = null; // 'move' | 'left' | 'right' | 'top' | 'bottom'
+        let startMouse = { x: 0, y: 0 };
+        let startBox = { x: 0, y: 0, width: 0, height: 0 };
+
+        function getScale() {
+            const scaleX = canvas.width / taskInfo.video_width;
+            const scaleY = canvas.height / taskInfo.video_height;
+            return { scaleX, scaleY };
+        }
+
+        function getCurrentBox() {
+            if (!intervals[currentIntervalIdx]) return null;
+            const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
+            return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+        }
+
+        function clampBox(box) {
+            // Ensure box stays within video bounds
+            box.x = Math.max(0, Math.min(box.x, taskInfo.video_width - box.width));
+            box.y = Math.max(0, Math.min(box.y, taskInfo.video_height - box.height));
+            box.width = Math.max(1, Math.min(box.width, taskInfo.video_width - box.x));
+            box.height = Math.max(1, Math.min(box.height, taskInfo.video_height - box.y));
+            return box;
+        }
+
+        function canvasToVideoCoords(cx, cy) {
+            const { scaleX, scaleY } = getScale();
+            return { x: cx / scaleX, y: cy / scaleY };
+        }
+
+        function hitTestOnCanvas(cx, cy) {
+            const box = getCurrentBox();
+            if (!box) return null;
+            const { scaleX, scaleY } = getScale();
+            const bx = box.x * scaleX;
+            const by = box.y * scaleY;
+            const bw = box.width * scaleX;
+            const bh = box.height * scaleY;
+
+            const insideX = cx >= bx && cx <= bx + bw;
+            const insideY = cy >= by && cy <= by + bh;
+            const nearLeft = Math.abs(cx - bx) <= EDGE_MARGIN && insideY;
+            const nearRight = Math.abs(cx - (bx + bw)) <= EDGE_MARGIN && insideY;
+            const nearTop = Math.abs(cy - by) <= EDGE_MARGIN && insideX;
+            const nearBottom = Math.abs(cy - (by + bh)) <= EDGE_MARGIN && insideX;
+
+            if (nearLeft) return 'left';
+            if (nearRight) return 'right';
+            if (nearTop) return 'top';
+            if (nearBottom) return 'bottom';
+            if (insideX && insideY) return 'move';
+            return null;
+        }
+
+        function setCanvasCursor(cx, cy) {
+            const mode = hitTestOnCanvas(cx, cy);
+            let cursor = 'default';
+            if (mode === 'left' || mode === 'right') cursor = 'ew-resize';
+            else if (mode === 'top' || mode === 'bottom') cursor = 'ns-resize';
+            else if (mode === 'move') cursor = 'move';
+            canvas.style.cursor = cursor;
+        }
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            if (!isMouseDown) {
+                setCanvasCursor(cx, cy);
+                return;
+            }
+
+            if (!intervals[currentIntervalIdx]) return;
+            const { scaleX, scaleY } = getScale();
+            const vx = cx / scaleX;
+            const vy = cy / scaleY;
+            const dx = vx - startMouse.x;
+            const dy = vy - startMouse.y;
+
+            let newBox = { ...startBox };
+            if (dragMode === 'move') {
+                newBox.x = Math.round(startBox.x + dx);
+                newBox.y = Math.round(startBox.y + dy);
+            } else if (dragMode === 'left') {
+                const newX = Math.round(startBox.x + dx);
+                const maxX = startBox.x + startBox.width - 1;
+                newBox.x = Math.min(Math.max(0, newX), maxX);
+                newBox.width = startBox.width + (startBox.x - newBox.x);
+            } else if (dragMode === 'right') {
+                const newRight = Math.round(startBox.x + startBox.width + dx);
+                const minRight = startBox.x + 1;
+                const clampedRight = Math.min(Math.max(minRight, newRight), taskInfo.video_width);
+                newBox.width = clampedRight - startBox.x;
+            } else if (dragMode === 'top') {
+                const newY = Math.round(startBox.y + dy);
+                const maxY = startBox.y + startBox.height - 1;
+                newBox.y = Math.min(Math.max(0, newY), maxY);
+                newBox.height = startBox.height + (startBox.y - newBox.y);
+            } else if (dragMode === 'bottom') {
+                const newBottom = Math.round(startBox.y + startBox.height + dy);
+                const minBottom = startBox.y + 1;
+                const clampedBottom = Math.min(Math.max(minBottom, newBottom), taskInfo.video_height);
+                newBox.height = clampedBottom - startBox.y;
+            }
+
+            newBox = clampBox(newBox);
+            // Update state and UI
+            intervals[currentIntervalIdx].coords = [newBox.x, newBox.x + newBox.width, newBox.y, newBox.y + newBox.height];
+            updateSliderValues(newBox);
+            redrawCanvas(newBox);
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const mode = hitTestOnCanvas(cx, cy);
+            if (!mode) return;
+            const { x, y } = canvasToVideoCoords(cx, cy);
+            const box = getCurrentBox();
+            if (!box) return;
+            isMouseDown = true;
+            dragMode = mode;
+            startMouse = { x, y };
+            startBox = { ...box };
+            e.preventDefault();
+        });
+
+        function finishDragOrResize() {
+            if (!isMouseDown) return;
+            isMouseDown = false;
+            const box = getCurrentBox();
+            if (box) {
+                // Persist to backend
+                saveBox(box);
+            }
+        }
+
+        canvas.addEventListener('mouseup', () => finishDragOrResize());
+        canvas.addEventListener('mouseleave', () => finishDragOrResize());
+ 
         // --- HANDLING USER INPUT AND SAVING ---
         function handleSliderInput() {
             const box = {
