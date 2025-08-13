@@ -307,8 +307,10 @@ class STTNVideoInpaint:
             reader, frame_info = self.read_frame_info_from_video()
             if input_sub_remover is not None:
                 writer = input_sub_remover.video_writer
+                print(f"[WRITE] Using external writer from remover. target size=({frame_info['W_ori']},{frame_info['H_ori']}), fps={frame_info['fps']}")
             else:
                 writer = cv2.VideoWriter(self.video_out_path, cv2.VideoWriter_fourcc(*"mp4v"), frame_info['fps'], (frame_info['W_ori'], frame_info['H_ori']))
+                print(f"[WRITE] Created internal writer at {self.video_out_path}. opened={writer.isOpened()} target size=({frame_info['W_ori']},{frame_info['H_ori']}), fps={frame_info['fps']}")
 
             total_frames = frame_info['len']
             all_frames = []
@@ -432,9 +434,25 @@ class STTNVideoInpaint:
                     frame = inpainted_dict[i]
                 else:
                     frame = all_frames[i]
-                writer.write(frame)
+                # Debug: validate frame before writing
+                try:
+                    if frame is None:
+                        print(f"[WRITE][WARN] Frame {i} is None, skipping write")
+                        if show_tqdm:
+                            pbar.update(1)
+                        continue
+                    h, w = frame.shape[:2]
+                    if (w != frame_info['W_ori']) or (h != frame_info['H_ori']):
+                        print(f"[WRITE][WARN] Frame {i} size mismatch. expected=({frame_info['W_ori']},{frame_info['H_ori']}) got=({w},{h})")
+                    if not writer or not writer.isOpened():
+                        print(f"[WRITE][ERROR] Writer not opened at frame {i}")
+                    writer.write(frame)
+                except Exception as e:
+                    print(f"[WRITE][ERROR] Exception writing frame {i}: {e}")
+                    # continue with next frame
                 if input_sub_remover is not None:
-                    # Do not update user-facing progress during final write; that is covered by inpaint progress above
+                    if tbar is not None:
+                        input_sub_remover.update_progress(tbar, increment=1)
                     if input_sub_remover.gui_mode:
                         input_sub_remover.preview_frame = cv2.hconcat([all_frames[i], frame])
                 if show_tqdm:

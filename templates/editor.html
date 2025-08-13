@@ -435,8 +435,9 @@
             
             // Only update timeline if video is playing AND user is not manually scrubbing
             // This prevents the drawLoop from interfering with manual timeline scrubbing
+            // WARNING: Avoid writing to timeline on every animation frame to prevent seeking churn.
+            // Only refresh the readout; leave the slider alone while playing.
             if (!video.paused && !isUserScrubbing) {
-                timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
 
@@ -747,6 +748,10 @@
         };
         
         timeline.oninput = () => {
+            // Ignore programmatic timeline updates; only act on real user scrubs
+            if (!isUserScrubbing) {
+                return;
+            }
             isUserScrubbing = true; // Ensure scrubbing flag is set during input
             const targetFrame = parseInt(timeline.value);
             
