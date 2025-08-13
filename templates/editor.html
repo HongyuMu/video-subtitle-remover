@@ -310,13 +310,9 @@
                     editorMainEl.classList.add(isLandscape ? 'landscape' : 'portrait');
 
                     // Get actual video properties
-                    taskInfo.fps = video.videoWidth > 0 ? video.getVideoPlaybackQuality().totalVideoFrames / video.duration : 30;
-                    console.log(`[Video FPS]`, taskInfo.fps);
                     console.log(`[Video duration]`, video.duration);
                     console.log(`[Actual total frames]`, intervals[intervals.length-1].frame_range[1]);
-                    if (!taskInfo.fps || isNaN(taskInfo.fps)) {
-                        taskInfo.fps = intervals.length >= 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
-                    }
+                    taskInfo.fps = intervals.length >= 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
                     console.log(`[FPS from calculation]`, taskInfo.fps);
                     
                 // Set timeline max to actual total frames for full video playback
