@@ -494,6 +494,7 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
         processed_video_path,
         status_file
     )
+    print(f"[PROCESS] Started background task for {original_stem}. status_file={status_file}, output={processed_video_path}")
     
     return {
         "message": "Video processing started.",
@@ -530,7 +531,9 @@ def process_video(video_path, json_path, output_path, status_file):
         with open(status_file, 'w') as f:
             json.dump({"status": f"Error: {e}"}, f)
     finally:
-        for path in [video_path, json_path]:
+        # Keep original video so the editor can continue streaming it after processing.
+        # Only remove the temporary JSON file here; video cleanup is handled by manual cleanup.
+        for path in [json_path]:
             if os.path.exists(path):
                 os.remove(path)
 
