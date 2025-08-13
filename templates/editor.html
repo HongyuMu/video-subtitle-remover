@@ -61,7 +61,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: auto;
+            pointer-events: none;
         }
                  .timeline-container {
              width: 100%;
@@ -482,6 +482,7 @@
         let dragMode = null; // 'move' | 'left' | 'right' | 'top' | 'bottom'
         let startMouse = { x: 0, y: 0 };
         let startBox = { x: 0, y: 0, width: 0, height: 0 };
+        const previewContainer = document.querySelector('.preview-container');
 
         function getScale() {
             const scaleX = canvas.width / taskInfo.video_width;
@@ -619,6 +620,38 @@
 
         canvas.addEventListener('mouseup', () => finishDragOrResize());
         canvas.addEventListener('mouseleave', () => finishDragOrResize());
+
+        // Toggle canvas pointer-events based on proximity to the box so that
+        // clicks outside the box (or on video controls) reach the <video> element.
+        function updateCanvasPointerEventsFromMouseEvent(e) {
+            if (isMouseDown) return; // keep interactions while dragging
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            const within = cx >= 0 && cy >= 0 && cx <= rect.width && cy <= rect.height;
+            if (!within) {
+                canvas.style.pointerEvents = 'none';
+                canvas.style.cursor = 'default';
+                return;
+            }
+            const mode = hitTestOnCanvas(cx, cy);
+            if (mode) {
+                canvas.style.pointerEvents = 'auto';
+                setCanvasCursor(cx, cy);
+            } else {
+                canvas.style.pointerEvents = 'none';
+                canvas.style.cursor = 'default';
+            }
+        }
+
+        if (previewContainer) {
+            previewContainer.addEventListener('mousemove', updateCanvasPointerEventsFromMouseEvent, { passive: true });
+            previewContainer.addEventListener('mouseleave', () => {
+                if (isMouseDown) return;
+                canvas.style.pointerEvents = 'none';
+                canvas.style.cursor = 'default';
+            });
+        }
  
         // --- HANDLING USER INPUT AND SAVING ---
         function handleSliderInput() {
