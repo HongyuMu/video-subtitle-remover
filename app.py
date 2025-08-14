@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, RedirectResponse
 from pathlib import Path
 import os
 import json
 import shutil
 import tempfile
+
+from numpy._core.numeric import False_
 from backend.main import SubtitleRemover, SubtitleDetect
 import backend.config as config
 from typing import Optional, List
@@ -167,12 +169,12 @@ async def find_subtitles(
         if url:
             temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
             await download_file(url, temp_video_path)
-            if original_name == "unknown_url_file":
+            if original_name == "unknown_file":
                 original_name = Path(url).stem
         elif cloud_ref:
             temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
             await download_file(cloud_ref, temp_video_path)
-            if original_name == "unknown_url_file":
+            if original_name == "unknown_file":
                 original_name = Path(cloud_ref).stem
         elif file:
             temp_video_path = save_temp_file(file)
@@ -205,9 +207,7 @@ async def find_subtitles(
 
     return {
         "message": "Subtitle detection started.",
-        "task_id": task_id,
-        "status_url": f"/status/{status_file.name}",
-        "result_url": f"/task/{task_id}/result"
+        "task_id": task_id
     }
 
 
@@ -357,7 +357,7 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-@app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=True)
+@app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=False)
 async def get_editor(task_id: str, request: Request, format: Optional[str] = None):
     """
     Serve the HTML editor page for a given task.
@@ -391,23 +391,45 @@ async def get_editor(task_id: str, request: Request, format: Optional[str] = Non
 
 
 # Sends the task info to the editor page (video dimensions, filename, user_id)
-@app.get("/task_info/{task_id}", include_in_schema=False)
-async def get_task_info(task_id: str):
+@app.get("/task_info/{task_id}", include_in_schema=True)
+async def get_task_info(task_id: str, request: Request):
     """
     Returns metadata for a given task, including video dimensions.
+    Also used for polling detection status.
     """
     result = TASK_RESULTS.get(task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    return {
-        "video_width": result.get("video_width"),
-        "video_height": result.get("video_height"),
-        "original_filename": result.get("original_filename"),
-        "user_id": result.get("user_id"),
-        "fps": result.get("fps"),
-        "total_frames": result.get("total_frames")
-    }
+    status = result.get("status")
+
+    if status == "Detecting":
+        status_file_path = result.get("status_file")
+        if status_file_path and os.path.exists(status_file_path):
+            try:
+                with open(status_file_path, 'r') as f:
+                    return json.load(f)
+            except (IOError, json.JSONDecodeError):
+                pass # Fallback if file is empty or corrupt
+        return {"status": "Detecting...", "progress": 0}
+
+    elif status == "Completed":
+        return {
+            "status": "Completed",
+            "video_width": result.get("video_width"),
+            "video_height": result.get("video_height"),
+            "original_filename": result.get("original_filename"),
+            "user_id": result.get("user_id"),
+            "fps": result.get("fps"),
+            "total_frames": result.get("total_frames"),
+            "editor_url": str(request.url_for('get_editor', task_id=task_id))
+        }
+
+    elif status == "Error":
+        return {"status": "Error", "message": result.get("error", "An unknown error occurred.")}
+    
+    return {"status": "Unknown"}
+
 
 # 
 @app.post("/process_task/{task_id}", include_in_schema=False)
@@ -558,51 +580,6 @@ def process_video(video_path, json_path, output_path, status_file):
         for path in [json_path]:
             if os.path.exists(path):
                 os.remove(path)
-
-
-@app.get("/status/{status_filename}")
-async def get_status(status_filename: str):
-    status_path = PROCESSED_DIR / status_filename
-    if not status_path.exists():
-        # This is expected before the background task creates the file. Frontend will retry.
-        return JSONResponse(content={"status": "Not Found"}, status_code=404)
-    
-    try:
-        with open(status_path, 'r') as f:
-            content = f.read().strip()
-        
-        if not content:
-            # File is empty, meaning processing is just starting.
-            return JSONResponse(content={"status": "Processing..."})
-        
-        # New format: status file contains a JSON object.
-        status_data = json.loads(content)
-        return JSONResponse(content=status_data)
-    except json.JSONDecodeError:
-        # Backwards compatibility for old format where the file was just a string.
-        return JSONResponse(content={"status": content})
-    except Exception as e:
-        return JSONResponse(content={"status": f"Error reading status file: {e}"}, status_code=500)
-
-
-@app.get("/task/{task_id}/result")
-async def get_task_result(task_id: str, request: Request):
-    """
-    Checks the result of a detection task. If complete, returns the editor URL.
-    """
-    result = TASK_RESULTS.get(task_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    status = result.get("status")
-    if status == "Completed":
-        editor_url = str(request.url_for('get_editor', task_id=task_id))
-        return {"status": "Completed", "editor_url": editor_url}
-    elif status == "Error":
-        return {"status": "Error", "message": result.get("error", "An unknown error occurred during detection.")}
-    else:
-        # If not completed or error, it's still processing
-        return {"status": "Detecting"}
 
 
 @app.get("/download_video/{video_filename}", include_in_schema=False)

@@ -876,7 +876,12 @@
             // as this can cause floating point rounding errors that make the timeline jump.
             // Let the user's input be the source of truth during the scrub.
             if (video.paused && !isUpdated && !isUserScrubbing) {
-                const currentFrame = getCurrentFrame();
+                let currentFrame = getCurrentFrame();
+                // When a video finishes playing, its currentTime may slightly exceed
+                // the duration, causing the calculated frame to be one larger than the max.
+                if (currentFrame > timeline.max) {
+                    currentFrame = parseInt(timeline.max);
+                }
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
                 console.log(`[Video]`, currentFrame);
