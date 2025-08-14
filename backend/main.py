@@ -666,9 +666,12 @@ class SubtitleRemover:
         self.is_successful_merged = False
         # Optional: external status file to write progress for frontend polling
         self.status_file_path = None
-        # Track inpainting progress explicitly when available
+        # Progress tracking
+        self.stage = None  # 'inpaint' or 'write'
         self.total_inpaint_frames = None
         self.processed_inpaint_frames = 0
+        self.total_write_frames = None
+        self.processed_write_frames = 0
 
     @staticmethod
     def get_coordinates(dt_box):
@@ -712,38 +715,68 @@ class SubtitleRemover:
                 return end_no
         return -1
 
-    def update_progress(self, tbar, increment):
-        # Prefer explicit inpainting progress if configured
-        percent = None
-        if self.total_inpaint_frames is not None and self.total_inpaint_frames > 0:
+    def set_stage(self, stage: str, total: int):
+        # Initialize stage and totals
+        self.stage = stage
+        if stage == 'inpaint':
+            self.total_inpaint_frames = total or 0
+            self.processed_inpaint_frames = 0
+        elif stage == 'write':
+            self.total_write_frames = total or 0
+            self.processed_write_frames = 0
+        # Emit initial status snapshot
+        if self.status_file_path:
             try:
-                self.processed_inpaint_frames += int(increment)
-                if self.processed_inpaint_frames < 0:
-                    self.processed_inpaint_frames = 0
-                if self.processed_inpaint_frames > self.total_inpaint_frames:
-                    self.processed_inpaint_frames = self.total_inpaint_frames
-                percent = int((self.processed_inpaint_frames / self.total_inpaint_frames) * 100)
+                with open(self.status_file_path, 'w') as f:
+                    json.dump({
+                        "status": "Processing...",
+                        "stage": stage,
+                        "progress": 0
+                    }, f)
             except Exception:
-                percent = None
-        # Fallback to tqdm-based percentage if no explicit plan
-        if percent is None and tbar is not None and tbar.total:
-            try:
+                pass
+
+    def update_progress(self, tbar, increment):
+        # Update tqdm for CLI visibility
+        try:
+            if tbar is not None and increment:
                 tbar.update(increment)
+        except Exception:
+            pass
+
+        percent = None
+        # Use stage-aware counters
+        try:
+            if self.stage == 'inpaint' and self.total_inpaint_frames:
+                self.processed_inpaint_frames = min(self.total_inpaint_frames,
+                                                    self.processed_inpaint_frames + int(increment or 0))
+                percent = int((self.processed_inpaint_frames / self.total_inpaint_frames) * 100)
+            elif self.stage == 'write' and self.total_write_frames:
+                self.processed_write_frames = min(self.total_write_frames,
+                                                  self.processed_write_frames + int(increment or 0))
+                percent = int((self.processed_write_frames / self.total_write_frames) * 100)
+        except Exception:
+            percent = None
+
+        # Fallback to tqdm if no stage totals
+        if percent is None and tbar is not None and getattr(tbar, 'total', 0):
+            try:
                 percent = int((tbar.n / tbar.total) * 100)
             except Exception:
                 percent = None
-        # Keep legacy fields for compatibility with any consumers
+
         if percent is not None:
             self.progress_total = percent
             self.progress_remover = percent
-        # Optionally write progress to status file
-        if self.status_file_path:
+
+        if self.status_file_path and percent is not None:
             try:
-                payload = {"status": "Processing..."}
-                if percent is not None:
-                    payload["progress"] = int(percent)
                 with open(self.status_file_path, 'w') as f:
-                    json.dump(payload, f)
+                    json.dump({
+                        "status": "Processing...",
+                        "stage": self.stage or "",
+                        "progress": int(percent)
+                    }, f)
             except Exception:
                 pass
 
