@@ -238,7 +238,7 @@
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
         let currentImage = new Image(); // An image object to hold the current raw video frame
         let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
-        
+        let isUpdated = false;
 
         // Helper function to disable controls during async operations like seeking
         function setControlsDisabled(disabled) {
@@ -344,7 +344,7 @@
         function setTimelinePosition(frame) {
             // Helper function to manually set timeline position (expects 0-based frame)
             isUserScrubbing = true;
-            
+            isUpdated = true;
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
             currentFrameDisplay.textContent = `Frame: ${frame}`;
@@ -860,25 +860,30 @@
 
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
-            // If the user is manually scrubbing the timeline, don't interfere.
-            if (isUserScrubbing) {
-                return;
+            // This new block handles timeline updates during video playback.
+            if (!video.paused && !isUserScrubbing) {
+                const currentFrame = getCurrentFrame();
+                timeline.value = currentFrame;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
 
-            const currentFrame = getCurrentFrame();
-            
-            // Sync timeline slider and frame number display with video playback.
-            timeline.value = currentFrame;
-            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
-            
-            // When paused, check if we've landed in a new subtitle interval and load it.
-            if (video.paused) {
+            // Do not sync timeline from video while the user is actively scrubbing,
+            // as this can cause floating point rounding errors that make the timeline jump.
+            // Let the user's input be the source of truth during the scrub.
+            if (video.paused && !isUpdated && !isUserScrubbing) {
+                const currentFrame = getCurrentFrame();
+                timeline.value = currentFrame;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                console.log(`[Video]`, currentFrame);
+                
+                // When paused, if the frame has changed to a new interval, load it.
                 const activeIdx = findActiveInterval(currentFrame);
                 if (activeIdx !== -1 && activeIdx !== currentIntervalIdx) {
-                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} while paused.`);
+                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
                     loadInterval(activeIdx, true);
                 }
             }
+            isUpdated = false;
         };
 
         startFrameInput.onchange = saveInterval;
