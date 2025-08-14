@@ -281,7 +281,7 @@
         const mergePrevBtn = document.getElementById('merge-prev-btn');
         const splitIntervalBtn = document.getElementById('split-interval-btn');
 
-        // This is the main function that runs when the page loads.
+        // This is the main function that runs when the page first loads.
         async function initializeEditor() {
             try {
                 const [intervalsResponse, infoResponse] = await Promise.all([
@@ -297,7 +297,8 @@
                 
                 updateSliderSteps();
 
-                // Event handlers to manage control state during seeking ---
+                // The seeking event is triggered when the user jumps to a new frame
+                // The seeked event is triggered when the video has finished seeking
                 video.onseeking = () => setControlsDisabled(true);
                 video.onseeked = () => setControlsDisabled(false);
                 
@@ -310,7 +311,7 @@
                     editorMainEl.classList.remove('portrait', 'landscape');
                     editorMainEl.classList.add(isLandscape ? 'landscape' : 'portrait');
 
-                    // Use authoritative total_frames and fps from the backend
+                    // Use authoritative total_frames and fps from the backend OpenCV reader
                     if (taskInfo.total_frames && taskInfo.fps) {
                         console.log(`[INIT] Using authoritative video info from backend: ${taskInfo.total_frames} frames at ${taskInfo.fps.toFixed(2)} FPS.`);
                         timeline.max = taskInfo.total_frames;
@@ -342,9 +343,9 @@
         }
 
         function setTimelinePosition(frame) {
-            // Helper function to manually set timeline position (expects 0-based frame)
+            // Helper function to set timeline position (expects 0-based frame)
             isUserScrubbing = true;
-            isUpdated = true;
+            isUpdated = true; // Flag to prevent timeline updates during scrubbing
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
             currentFrameDisplay.textContent = `Frame: ${frame}`;
@@ -391,7 +392,7 @@
             updateSliderRanges();
             updateSliderValues(currentBox);
 
-            // Draw the correct box on top of the current <video> frame
+            // Draw the correct box on top of the current interval's subtitle
             redrawCanvas(currentBox);
 
             // Always enable navigation buttons - let the click handlers deal with bounds
@@ -447,8 +448,6 @@
             
             // Only update timeline if video is playing AND user is not manually scrubbing
             // This prevents the drawLoop from interfering with manual timeline scrubbing
-            // WARNING: Avoid writing to timeline on every animation frame to prevent seeking churn.
-            // Only refresh the readout; leave the slider alone while playing.
             if (!video.paused && !isUserScrubbing) {
                 currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
             }
@@ -489,7 +488,7 @@
             ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
         }
         
-        // --- MOUSE INTERACTION: DRAG/RESIZE BOX ---
+        // MOUSE INTERACTION: DRAG/RESIZE BOX
         const EDGE_MARGIN = 8; // pixels on canvas space
         let isMouseDown = false;
         let dragMode = null; // 'move' | 'left' | 'right' | 'top' | 'bottom'
@@ -518,11 +517,16 @@
             return box;
         }
 
+        // Convert canvas coordinates back to original video frame coordinates
         function canvasToVideoCoords(cx, cy) {
             const { scaleX, scaleY } = getScale();
             return { x: cx / scaleX, y: cy / scaleY };
         }
 
+        // Determines if the cursor is in the box or an edge of the box
+        // send 'move' signal if the cursor is in the box
+        // send 'left', 'right', 'top', 'bottom' signals if the cursor is on any edge of the box
+        // send null if the cursor is not in the box or an edge of the box
         function hitTestOnCanvas(cx, cy) {
             const box = getCurrentBox();
             if (!box) return null;
@@ -553,6 +557,7 @@
             if (mode === 'left' || mode === 'right') cursor = 'ew-resize';
             else if (mode === 'top' || mode === 'bottom') cursor = 'ns-resize';
             else if (mode === 'move') cursor = 'move';
+            // Do not set cursor if the cursor is not in the proximity of the box
             canvas.style.cursor = cursor;
         }
 
@@ -715,7 +720,7 @@
                     intervals = data.new_intervals;
                     originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
                     alert(data.message); // Show the more informative message from the server
-                    
+                    console.log(`[Interval]`, `Saved interval ${currentIntervalIdx + 1} with frame range [${startFrame}, ${endFrame}]`);
                     // The indices might have changed, so we reload the current interval to be safe
                     loadInterval(currentIntervalIdx);
                 } else {
@@ -860,7 +865,7 @@
 
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
-            // This new block handles timeline updates during video playback.
+            // Handles timeline updates during video playback.
             if (!video.paused && !isUserScrubbing) {
                 const currentFrame = getCurrentFrame();
                 timeline.value = currentFrame;
