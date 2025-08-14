@@ -195,6 +195,7 @@ async def find_subtitles(
         fps = cap.get(cv2.CAP_PROP_FPS)
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
         # Filter out mistake subtitle areas by checking the fps
@@ -250,6 +251,8 @@ async def find_subtitles(
             "video_path": temp_video_path,
             "video_width": video_width,
             "video_height": video_height,
+            "fps": fps,
+            "total_frames": total_frames,
             "timestamp": time.time(),
             "user_id": user_id,
         }
@@ -460,7 +463,9 @@ async def get_task_info(task_id: str):
         "video_width": result.get("video_width"),
         "video_height": result.get("video_height"),
         "original_filename": result.get("original_filename"),
-        "user_id": result.get("user_id")
+        "user_id": result.get("user_id"),
+        "fps": result.get("fps"),
+        "total_frames": result.get("total_frames")
     }
 
 # 

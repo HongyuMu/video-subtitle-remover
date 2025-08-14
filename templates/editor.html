@@ -238,7 +238,7 @@
         let debounceTimer; // A timer to prevent spamming the API while moving sliders
         let currentImage = new Image(); // An image object to hold the current raw video frame
         let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
-        let isUpdated = false;
+        
 
         // Helper function to disable controls during async operations like seeking
         function setControlsDisabled(disabled) {
@@ -310,16 +310,18 @@
                     editorMainEl.classList.remove('portrait', 'landscape');
                     editorMainEl.classList.add(isLandscape ? 'landscape' : 'portrait');
 
-                    // Get actual video properties
-                    console.log(`[Video duration]`, video.duration);
-                    console.log(`[Actual total frames]`, intervals[intervals.length-1].frame_range[1]);
-                    taskInfo.fps = intervals.length >= 1 ? (intervals[intervals.length-1].frame_range[1] / video.duration) : 30;
-                    console.log(`[FPS from calculation]`, taskInfo.fps);
-                    
-                // Set timeline max to actual total frames for full video playback
-                timeline.max = intervals[intervals.length-1].frame_range[1];
-                // Keep native slider step at 1 so keyboard logic controls step precisely
-                timeline.step = 1;
+                    // Use authoritative total_frames and fps from the backend
+                    if (taskInfo.total_frames && taskInfo.fps) {
+                        console.log(`[INIT] Using authoritative video info from backend: ${taskInfo.total_frames} frames at ${taskInfo.fps.toFixed(2)} FPS.`);
+                        timeline.max = taskInfo.total_frames;
+                    } else {
+                        // Fallback for older tasks if data is missing
+                        console.warn("[INIT] Backend did not provide total_frames/fps. Guessing from intervals.");
+                        timeline.max = intervals.length > 0 ? intervals[intervals.length-1].frame_range[1] : 1000;
+                    }
+                    console.log(`[INIT] Timeline max: ${timeline.max}`);
+                    timeline.step = 1;
+
                     loadInterval(0);
                     requestAnimationFrame(drawLoop);
                 };
@@ -342,7 +344,7 @@
         function setTimelinePosition(frame) {
             // Helper function to manually set timeline position (expects 0-based frame)
             isUserScrubbing = true;
-            isUpdated = true;
+            
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
             currentFrameDisplay.textContent = `Frame: ${frame}`;
@@ -777,7 +779,7 @@
             video.currentTime = clampedFrame / taskInfo.fps;
             
             // Force immediate redraw when manually scrubbing
-            currentFrameDisplay.textContent = `Frame: ${clampedFrame - 1}`;
+            currentFrameDisplay.textContent = `Frame: ${clampedFrame}`;
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
@@ -858,23 +860,25 @@
 
         // Update timeline when video time changes (e.g., from navigation)
         video.ontimeupdate = () => {
-            // Do not sync timeline from video while the user is actively scrubbing,
-            // as this can cause floating point rounding errors that make the timeline jump.
-            // Let the user's input be the source of truth during the scrub.
-            if (video.paused && !isUpdated && !isUserScrubbing) {
-                const currentFrame = getCurrentFrame();
-                timeline.value = currentFrame;
-                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
-                console.log(`[Video]`, currentFrame);
-                
-                // When paused, if the frame has changed to a new interval, load it.
+            // If the user is manually scrubbing the timeline, don't interfere.
+            if (isUserScrubbing) {
+                return;
+            }
+
+            const currentFrame = getCurrentFrame();
+            
+            // Sync timeline slider and frame number display with video playback.
+            timeline.value = currentFrame;
+            currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+            
+            // When paused, check if we've landed in a new subtitle interval and load it.
+            if (video.paused) {
                 const activeIdx = findActiveInterval(currentFrame);
                 if (activeIdx !== -1 && activeIdx !== currentIntervalIdx) {
-                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} while paused.`);
                     loadInterval(activeIdx, true);
                 }
             }
-            isUpdated = false;
         };
 
         startFrameInput.onchange = saveInterval;
