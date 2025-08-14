@@ -582,6 +582,31 @@ def process_video(video_path, json_path, output_path, status_file):
                 os.remove(path)
 
 
+@app.get("/status/{status_filename}")
+async def get_status(status_filename: str):
+    status_path = PROCESSED_DIR / status_filename
+    if not status_path.exists():
+        # This is expected before the background task creates the file. Frontend will retry.
+        return JSONResponse(content={"status": "Not Found"}, status_code=404)
+    
+    try:
+        with open(status_path, 'r') as f:
+            content = f.read().strip()
+        
+        if not content:
+            # File is empty, meaning processing is just starting.
+            return JSONResponse(content={"status": "Processing..."})
+        
+        # New format: status file contains a JSON object.
+        status_data = json.loads(content)
+        return JSONResponse(content=status_data)
+    except json.JSONDecodeError:
+        # Backwards compatibility for old format where the file was just a string.
+        return JSONResponse(content={"status": content})
+    except Exception as e:
+        return JSONResponse(content={"status": f"Error reading status file: {e}"}, status_code=500)
+        
+
 @app.get("/download_video/{video_filename}", include_in_schema=False)
 async def download_video(video_filename: str):
     video_path = PROCESSED_DIR / video_filename

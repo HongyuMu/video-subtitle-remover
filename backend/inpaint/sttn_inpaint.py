@@ -393,6 +393,9 @@ class STTNVideoInpaint:
                         try:
                             batch_result = self.sttn_inpaint(batch_frames, mask)
                             inpainted_frames.extend(batch_result)
+                            # Update progress per batch when inpainting succeeds
+                            if input_sub_remover is not None:
+                                input_sub_remover.update_progress(tbar, increment=len(batch_result))
                         except Exception as e:
                             print(f"[ERROR] Failed to process batch: {e}")
                             print(f"[INFO] Trying with CPU...")
@@ -403,6 +406,8 @@ class STTNVideoInpaint:
                             try:
                                 batch_result = self.sttn_inpaint(batch_frames, mask)
                                 inpainted_frames.extend(batch_result)
+                                if input_sub_remover is not None:
+                                    input_sub_remover.update_progress(tbar, increment=len(batch_result))
                             finally:
                                 self.sttn_inpaint.device = original_device
                                 self.sttn_inpaint.model = self.sttn_inpaint.model.to(original_device)
@@ -417,9 +422,7 @@ class STTNVideoInpaint:
                             inpainted_dict[i_frame] = all_frames[i_frame]
                     frames_in_interval = len(valid_indices)
                     frames_processed += frames_in_interval
-                    # Update real progress based on inpainted frames, not final writing
-                    if input_sub_remover is not None:
-                        input_sub_remover.update_progress(tbar, increment=frames_in_interval)
+                    # Progress already updated per batch; no additional increment here to avoid double-counting
                     print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 
             # Now, write all frames in original order, using inpainted frames where available

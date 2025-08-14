@@ -931,6 +931,9 @@
                 height: ymax - ymin
             };
 
+            // Update local state FIRST so drawLoop uses the correct box on the next frame
+            intervals[currentIntervalIdx].coords = [xmin, xmax, ymin, ymax];
+
             // Update UI, load the current frame image, redraw canvas, and save the reverted state to the server
             updateSliderValues(originalBox);
             await loadFrameImage(getCurrentFrame(), originalBox);
