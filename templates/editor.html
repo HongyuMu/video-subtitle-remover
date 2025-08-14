@@ -152,7 +152,7 @@
             <div class="preview-container">
                 <video id="video-player" controls></video>
                 <canvas id="preview-canvas"></canvas>
-                <div id="processing-overlay" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.6); color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:12px;">
+                <div id="processing-overlay" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.6); color:#fff; flex-direction:column; align-items:center; justify-content:center; padding:24px; gap:12px;">
                     <div style="font-size:18px; text-align:center; max-width:90%;">
                         Your video is being processed. You can continue to browse, but edits are locked. After processing, a new video file will be generated for download.
                     </div>
@@ -1151,6 +1151,17 @@
             if (confirm("Once you confirm, you cannot make any changes to the video. Are you sure you want to proceed?")) {
                 finishBtn.disabled = true;
                 finishBtn.textContent = "Processing...";
+                // Show overlay immediately after user confirmation
+                const overlay = document.getElementById('processing-overlay');
+                const bar = document.getElementById('processing-bar');
+                const pct = document.getElementById('processing-percent');
+                const stageEl = document.getElementById('processing-stage');
+                if (overlay) {
+                    overlay.style.display = 'flex';
+                    bar.style.width = '0%';
+                    pct.textContent = '0%';
+                    stageEl.textContent = 'Stage: Preparing';
+                }
                 try {
                     // Tell the server to start the final video processing job
                     const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
