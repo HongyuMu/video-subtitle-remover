@@ -5,6 +5,9 @@ import os
 import json
 import shutil
 import tempfile
+import multiprocessing
+from backend.main import SubtitleExtractor
+from backend.tools import subtitle_ocr
 
 from numpy._core.numeric import False_
 from backend.main import SubtitleRemover, SubtitleDetect
@@ -913,5 +916,109 @@ async def merge_similar_intervals(task_id: str):
     }
 
 
+def generate_subtitle_task(video_path: str, srt_path: str, txt_path: str):
+    """
+    Background task to perform OCR, generate SRT, and then convert to TXT.
+    """
+    try:
+        raw_subtitle_path = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+        
+        # Configure OCR options
+        options = {
+            'REC_CHAR_TYPE': config.REC_CHAR_TYPE,
+            'DROP_SCORE': config.DROP_SCORE,
+            'SUB_AREA_DEVIATION_RATE': config.SUB_AREA_DEVIATION_RATE,
+            'DEBUG_OCR_LOSS': config.DEBUG_OCR_LOSS
+        }
+
+        # Start the asynchronous OCR process
+        process, task_queue, progress_queue = subtitle_ocr.async_start(
+            video_path,
+            raw_subtitle_path,
+            None, # No pre-defined sub area
+            options
+        )
+
+        # Feed frames to the OCR process
+        cap = cv2.VideoCapture(video_path)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        current_frame_no = 0
+        while cap.isOpened():
+            ret, _ = cap.read()
+            if not ret:
+                break
+            current_frame_no += 1
+            task = (frame_count, current_frame_no, None, None, None, None)
+            task_queue.put(task)
+            # Skip frames based on extract frequency
+            for _ in range(int(fps // config.EXTRACT_FREQUENCY) - 1):
+                if cap.isOpened():
+                    cap.read()
+                    current_frame_no += 1
+        
+        cap.release()
+        task_queue.put((frame_count, -1, None, None, None, None))
+        process.join()
+
+        # Generate SRT and then TXT
+        extractor = SubtitleExtractor(raw_subtitle_path, video_path)
+        generated_srt_path = extractor.generate_subtitle_file()
+        extractor.srt2txt(generated_srt_path)
+
+        # Move final txt file to its destination
+        final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
+        shutil.move(final_txt_path, txt_path)
+
+    except Exception as e:
+        print(f"Error in subtitle generation task: {e}")
+    finally:
+        # Clean up temporary raw subtitle file
+        if os.path.exists(raw_subtitle_path):
+            os.remove(raw_subtitle_path)
+        if os.path.exists(srt_path):
+            os.remove(srt_path)
+
+
+@app.post("/generate_subtitle_text/{task_id}")
+async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
+    """
+    Generates and returns a downloadable TXT file with subtitle content.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result or not result.get("video_path"):
+        raise HTTPException(status_code=404, detail="Video for this task not found.")
+
+    video_path = result["video_path"]
+    original_stem = result.get("original_filename", "unknown")
+    
+    # Define paths for the final SRT and TXT files
+    srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
+    txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
+
+    # Run the entire OCR and text generation process in the background
+    background_tasks.add_task(
+        generate_subtitle_task,
+        video_path=video_path,
+        srt_path=str(srt_path),
+        txt_path=str(txt_path)
+    )
+
+    # Poll until the txt file is created
+    timeout = 300  # 5 minutes timeout
+    start_time = time.time()
+    while not os.path.exists(txt_path):
+        await asyncio.sleep(1)
+        if time.time() - start_time > timeout:
+            raise HTTPException(status_code=504, detail="Subtitle generation timed out.")
+
+    return FileResponse(
+        path=txt_path,
+        media_type='text/plain',
+        filename=f"{original_stem}_subtitles.txt"
+    )
+
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
     uvicorn.run(app, host="0.0.0.0", port=8000)
