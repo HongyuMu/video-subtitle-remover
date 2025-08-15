@@ -123,6 +123,8 @@ DROP_SCORE = 0.75
 SUB_AREA_DEVIATION_RATE = 0
 # Output lost subtitle frames, only valid for Simplified Chinese, Traditional Chinese, Japanese, Korean. Default debug info is output to: video path/loss
 DEBUG_OCR_LOSS = False
+# Text similarity threshold for deduplication. Higher is stricter.
+THRESHOLD_TEXT_SIMILARITY = 0.8
 # ×××××××××× OCR Settings end ××××××××××
 
 # 【设置像素点偏差】
