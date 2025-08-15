@@ -1084,7 +1084,8 @@ class SubtitleRemover:
             self.distinct_coords = [self.sub_area]
             self.frame_intervals = [(1, self.frame_count)]
             print(f"[User Area] Using user-provided subtitle area for all frames: {self.sub_area}")
-        tbar = tqdm(unit='frame', position=0, file=sys.__stdout__, desc='Processing video')
+        tbar = tqdm(total=self.frame_count, unit='frame', position=0, file=sys.__stdout__,
+                desc='Processing video')
         if self.is_picture:
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             self.lama_inpaint = LamaInpaint()

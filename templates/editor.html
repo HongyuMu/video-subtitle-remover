@@ -702,7 +702,7 @@
 
         async function saveInterval() {
             const startFrame = parseInt(startFrameInput.value);
-            const endFrame = parseInt(endFrameInput.value);
+            const endFrame = Math.min(parseInt(endFrameInput.value), parseInt(timeline.max));
             intervals[currentIntervalIdx].frame_range = [startFrame, endFrame];
             try {
                 const response = await fetch(`/adjust_interval/${taskId}`, {
