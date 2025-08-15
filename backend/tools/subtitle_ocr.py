@@ -6,7 +6,8 @@ from PIL import ImageFont, ImageDraw, Image
 from tqdm import tqdm
 from backend.tools.ocr import OcrRecogniser, get_coordinates
 from backend.tools.constant import SubtitleArea
-from backend.tools.constant import constant
+from backend.tools import constant
+import backend.config as config
 from threading import Thread
 import queue
 from shapely.geometry import Polygon
@@ -81,8 +82,8 @@ def dump_debug_info(options, line, img, loss_list, ocr_loss_debug_path, sub_area
         for loss_info in loss_list:
             coordinate = loss_info.coordinate
             color = constant.BGR_COLOR_GREEN if loss_info.selected else constant.BGR_COLOR_RED
-            text = f"[{loss_info.text}] prob:{loss_info.prob:.4f} or:{loss_info.overflow_area_rate:.2f}"
-            img = paint_chinese_opencv(img, text, pos=(coordinate[0], coordinate[2] - 30), color=color)
+            text_to_paint = f"[{loss_info.text}] prob:{loss_info.prob:.4f} or:{loss_info.overflow_area_rate:.2f}"
+            img = paint_opencv(img, text_to_paint, pos=(coordinate[0], coordinate[2] - 30), color=color)
             img = cv2.rectangle(img, (coordinate[0], coordinate[2]), (coordinate[1], coordinate[3]), color, 2)
         cv2.imwrite(os.path.join(os.path.abspath(ocr_loss_debug_path), f'{str(data["i"]).zfill(8)}.png'), img)
 
@@ -103,24 +104,31 @@ def coordinate_to_polygon(coordinate):
     return Polygon([[xmin, ymin], [xmax, ymin], [xmax, ymax], [xmin, ymax]])
 
 
-FONT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'NotoSansCJK-Bold.otf')
-FONT = ImageFont.truetype(FONT_PATH, 20)
+def paint_opencv(im, text, pos, color):
+    # Use CJK font only for CJK languages to avoid errors when the font is not present
+    if config.REC_CHAR_TYPE in config.CJK_LANG:
+        try:
+            font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'NotoSansCJK-Bold.otf')
+            font = ImageFont.truetype(font_path, 20)
+            img_pil = Image.fromarray(im)
+            draw = ImageDraw.Draw(img_pil)
+            draw.text(pos, text, font=font, fill=color)
+            return np.asarray(img_pil)
+        except OSError:
+            # Fallback to default font if CJK font is not found
+            print("Warning: NotoSansCJK-Bold.otf not found. Using default font for debug overlay.")
+            pass
 
-
-def paint_chinese_opencv(im, chinese, pos, color):
-    img_pil = Image.fromarray(im)
-    fill_color = color  # (color[2], color[1], color[0])
-    position = pos
-    draw = ImageDraw.Draw(img_pil)
-    draw.text(position, chinese, font=FONT, fill=fill_color)
-    img = np.asarray(img_pil)
-    return img
+    # For non-CJK languages or as a fallback, use OpenCV's default font
+    int_pos = (int(pos[0]), int(pos[1]))
+    cv2.putText(im, text, int_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    return im
 
 
 def ocr_task_consumer(ocr_queue, raw_subtitle_path, sub_area, video_path, options):
     """
-    消费者： 消费ocr_queue，将ocr队列中的数据取出，进行ocr识别，写入字幕文件中
-    :param ocr_queue (current_frame_no当前帧帧号, frame 视频帧, dt_box检测框, rec_res识别结果)
+    consumer: consume ocr_queue, extract data from ocr_queue, perform ocr recognition, and write to subtitle file
+    :param ocr_queue (current_frame_no, frame, dt_box, rec_res)
     :param raw_subtitle_path
     :param sub_area
     :param video_path
