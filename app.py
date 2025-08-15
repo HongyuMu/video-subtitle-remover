@@ -1,10 +1,12 @@
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, RedirectResponse
 from pathlib import Path
 import os
 import json
 import shutil
 import tempfile
+
+from numpy._core.numeric import False_
 from backend.main import SubtitleRemover, SubtitleDetect
 import backend.config as config
 from typing import Optional, List
@@ -151,123 +153,62 @@ async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
 # Call the SubtitleDetect class functions to find subtitles
 @app.post("/find_subtitles/")
 async def find_subtitles(
-    request: Request,
+    background_tasks: BackgroundTasks,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = None,
     cloud_ref: Optional[str] = None,
     user_id: Optional[str] = None):
-    # Use the original filename (without extension) for the output JSON
-    original_name = Path(file.filename).stem if file else "unknown"
+    
+    original_name = Path(file.filename).stem if file else "unknown_file"
     temp_video_path = None
 
     if user_id is None:
         user_id = str(uuid.uuid4())
 
-    if url:
-        temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-        await download_file(url, temp_video_path)
-    elif cloud_ref:
-        # Assuming cloud_ref is a URL or a cloud storage path
-        temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-        await download_file(cloud_ref, temp_video_path)
-    else:
-        temp_video_path = save_temp_file(file)
-
     try:
-        # Check memory before processing
-        if not check_memory_usage():
-            raise HTTPException(status_code=503, detail="Server memory limit reached. Please try again later.")
-        
-        # Detect subtitle locations and intervals
-        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
-        # Create a temporary status file for detection progress
-        detection_status_file = PROCESSED_DIR / f"detect_{uuid.uuid4().hex}.status"
-        # Initialize status
-        with open(detection_status_file, 'w') as f:
-            json.dump({"status": "Detecting...", "progress": 0}, f)
-        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=str(detection_status_file))
-        if not subtitle_frame_no_box_dict:
-            raise HTTPException(status_code=404, detail="No subtitles found in the video.")
-
-        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
-        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
-        cap = cv2.VideoCapture(temp_video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-
-        # Filter out mistake subtitle areas by checking the fps
-        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
-
-        # Get the first entry of each subtitle area as the true subtitle
-        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
-        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
-        
-        # Merge nearby intervals to reduce manual work for users
-        merged_intervals = []
-        if sub_frame_no_list_continuous:
-            merged_intervals.append(sub_frame_no_list_continuous[0])
-            for i in range(1, len(sub_frame_no_list_continuous)):
-                last_start, last_end = merged_intervals[-1]
-                current_start, current_end = sub_frame_no_list_continuous[i]
-                
-                # If the gap is small and boxes are similar, merge them
-                if (current_start - last_end <= 3): # Merge if gap is smaller than 3 frames
-                    # Extend the previous interval
-                    merged_intervals[-1] = (last_start, current_end)
-                else:
-                    merged_intervals.append((current_start, current_end))
-        sub_frame_no_list_continuous = merged_intervals
-
-        distinct_coords = []
-        for start, end in sub_frame_no_list_continuous:
-            coords_in_interval = [
-                first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict
-            ]
-            if coords_in_interval:
-                unified_box = find_smallest_bounding_box(coords_in_interval)
-                distinct_coords.append(unified_box)
-            else:
-                distinct_coords.append(None) # Should not happen, but as a fallback
-        
-        json_content = {
-            "distinct_coordinates": distinct_coords,
-            "frame_intervals": sub_frame_no_list_continuous
-        }
-        # Save as original_filename_sub.json
-        json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
-        with open(json_file_path, "w") as json_file:
-            json.dump(json_content, json_file, indent=4)
-
-        # Store results
-        task_id = str(uuid.uuid4())
-        editor_url = str(request.url_for('get_editor', task_id=task_id))
-        TASK_RESULTS[task_id] = {
-            "distinct_coords": distinct_coords,
-            "frame_intervals": sub_frame_no_list_continuous,
-            "original_filename": original_name,
-            "video_path": temp_video_path,
-            "video_width": video_width,
-            "video_height": video_height,
-            "fps": fps,
-            "total_frames": total_frames,
-            "timestamp": time.time(),
-            "user_id": user_id,
-        }
-        return {
-            "task_id": task_id,
-            "user_id": user_id,
-            "editor_url": editor_url,
-            "detect_status_url": f"/status/{detection_status_file.name}"
-        }
-
+        if url:
+            temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+            await download_file(url, temp_video_path)
+            if original_name == "unknown_file":
+                original_name = Path(url).stem
+        elif cloud_ref:
+            temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+            await download_file(cloud_ref, temp_video_path)
+            if original_name == "unknown_file":
+                original_name = Path(cloud_ref).stem
+        elif file:
+            temp_video_path = save_temp_file(file)
+        else:
+            raise HTTPException(status_code=400, detail="No video file or URL provided.")
     except Exception as e:
-        print("Error in find_subtitles: ", e)
-        if temp_video_path and os.path.exists(temp_video_path):
-            os.remove(temp_video_path)
-        raise e
+        raise HTTPException(status_code=500, detail=f"Failed to process input video: {e}")
+
+    # Create a unique ID for this detection task
+    task_id = str(uuid.uuid4())
+    status_file = PROCESSED_DIR / f"detect_{task_id}.status"
+
+    # Store a placeholder to indicate the task is running
+    TASK_RESULTS[task_id] = {
+        "status": "Detecting",
+        "timestamp": time.time(),
+        "user_id": user_id,
+        "original_filename": original_name,
+        "status_file": str(status_file),
+        "video_path": temp_video_path, # Store path for cleanup
+    }
+
+    # Start the long-running detection process in the background
+    background_tasks.add_task(
+        detect_subtitles_task,
+        task_id=task_id,
+        temp_video_path=temp_video_path,
+        status_file=str(status_file)
+    )
+
+    return {
+        "message": "Subtitle detection started.",
+        "task_id": task_id
+    }
 
 
 @app.get("/subtitle_intervals/{task_id}", include_in_schema=False)
@@ -416,7 +357,7 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-@app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=True)
+@app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=False)
 async def get_editor(task_id: str, request: Request, format: Optional[str] = None):
     """
     Serve the HTML editor page for a given task.
@@ -450,23 +391,45 @@ async def get_editor(task_id: str, request: Request, format: Optional[str] = Non
 
 
 # Sends the task info to the editor page (video dimensions, filename, user_id)
-@app.get("/task_info/{task_id}", include_in_schema=False)
-async def get_task_info(task_id: str):
+@app.get("/task_info/{task_id}", include_in_schema=True)
+async def get_task_info(task_id: str, request: Request):
     """
     Returns metadata for a given task, including video dimensions.
+    Also used for polling detection status.
     """
     result = TASK_RESULTS.get(task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    return {
-        "video_width": result.get("video_width"),
-        "video_height": result.get("video_height"),
-        "original_filename": result.get("original_filename"),
-        "user_id": result.get("user_id"),
-        "fps": result.get("fps"),
-        "total_frames": result.get("total_frames")
-    }
+    status = result.get("status")
+
+    if status == "Detecting":
+        status_file_path = result.get("status_file")
+        if status_file_path and os.path.exists(status_file_path):
+            try:
+                with open(status_file_path, 'r') as f:
+                    return json.load(f)
+            except (IOError, json.JSONDecodeError):
+                pass # Fallback if file is empty or corrupt
+        return {"status": "Detecting...", "progress": 0}
+
+    elif status == "Completed":
+        return {
+            "status": "Completed",
+            "video_width": result.get("video_width"),
+            "video_height": result.get("video_height"),
+            "original_filename": result.get("original_filename"),
+            "user_id": result.get("user_id"),
+            "fps": result.get("fps"),
+            "total_frames": result.get("total_frames"),
+            "editor_url": str(request.url_for('get_editor', task_id=task_id))
+        }
+
+    elif status == "Error":
+        return {"status": "Error", "message": result.get("error", "An unknown error occurred.")}
+    
+    return {"status": "Unknown"}
+
 
 # 
 @app.post("/process_task/{task_id}", include_in_schema=False)
@@ -508,6 +471,82 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
     }
 
 
+def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
+    """
+    A background task that runs the entire subtitle detection pipeline.
+    It updates the shared TASK_RESULTS dictionary upon completion.
+    """
+    try:
+        # Initialize status file for frontend polling
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Detecting...", "progress": 0}, f)
+        
+        # --- Start of detection logic ---
+        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_file)
+        if not subtitle_frame_no_box_dict:
+            raise ValueError("No subtitles found in the video.")
+
+        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+        
+        cap = cv2.VideoCapture(temp_video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+
+        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
+        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        
+        merged_intervals = []
+        if sub_frame_no_list_continuous:
+            merged_intervals.append(sub_frame_no_list_continuous[0])
+            for i in range(1, len(sub_frame_no_list_continuous)):
+                last_start, last_end = merged_intervals[-1]
+                current_start, current_end = sub_frame_no_list_continuous[i]
+                if (current_start - last_end <= 3):
+                    merged_intervals[-1] = (last_start, current_end)
+                else:
+                    merged_intervals.append((current_start, current_end))
+        sub_frame_no_list_continuous = merged_intervals
+
+        distinct_coords = []
+        for start, end in sub_frame_no_list_continuous:
+            coords_in_interval = [first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict]
+            if coords_in_interval:
+                unified_box = find_smallest_bounding_box(coords_in_interval)
+                distinct_coords.append(unified_box)
+            else:
+                distinct_coords.append(None)
+        # --- End of detection logic ---
+
+        # Update the task result with the final data
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id].update({
+                "status": "Completed",
+                "distinct_coords": distinct_coords,
+                "frame_intervals": sub_frame_no_list_continuous,
+                "video_width": video_width,
+                "video_height": video_height,
+                "fps": fps,
+                "total_frames": total_frames,
+            })
+
+        # Final status file update
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Completed"}, f)
+            
+    except Exception as e:
+        error_message = f"Error: {e}"
+        print(f"Error in detect_subtitles_task for task {task_id}: {error_message}")
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id].update({"status": "Error", "error": str(e)})
+        with open(status_file, 'w') as f:
+            json.dump({"status": error_message}, f)
+
 # Call the SubtitleRemover class to remove subtitles
 def process_video(video_path, json_path, output_path, status_file):
     try:
@@ -543,7 +582,7 @@ def process_video(video_path, json_path, output_path, status_file):
                 os.remove(path)
 
 
-@app.get("/status/{status_filename}")
+@app.get("/status/{status_filename}", include_in_schema=False)
 async def get_status(status_filename: str):
     status_path = PROCESSED_DIR / status_filename
     if not status_path.exists():
@@ -566,7 +605,7 @@ async def get_status(status_filename: str):
         return JSONResponse(content={"status": content})
     except Exception as e:
         return JSONResponse(content={"status": f"Error reading status file: {e}"}, status_code=500)
-
+        
 
 @app.get("/download_video/{video_filename}", include_in_schema=False)
 async def download_video(video_filename: str):

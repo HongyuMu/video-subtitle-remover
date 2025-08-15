@@ -365,7 +365,7 @@ class STTNVideoInpaint:
                 # Configure explicit progress tracking on the remover (if provided)
                 if input_sub_remover is not None:
                     total_to_inpaint = sum(len(frames) for frames in interval_batches)
-                    input_sub_remover.set_stage('inpaint', total_to_inpaint)
+                    input_sub_remover.set_stage('inpaint', total_to_inpaint, tbar)
                 for idx, (frames_to_inpaint, valid_indices) in enumerate(zip(interval_batches, interval_indices)):
                     if not frames_to_inpaint:
                         continue
@@ -393,6 +393,9 @@ class STTNVideoInpaint:
                         try:
                             batch_result = self.sttn_inpaint(batch_frames, mask)
                             inpainted_frames.extend(batch_result)
+                            # Update progress per batch when inpainting succeeds
+                            if input_sub_remover is not None:
+                                input_sub_remover.update_progress(tbar, increment=len(batch_result))
                         except Exception as e:
                             print(f"[ERROR] Failed to process batch: {e}")
                             print(f"[INFO] Trying with CPU...")
@@ -403,6 +406,8 @@ class STTNVideoInpaint:
                             try:
                                 batch_result = self.sttn_inpaint(batch_frames, mask)
                                 inpainted_frames.extend(batch_result)
+                                if input_sub_remover is not None:
+                                    input_sub_remover.update_progress(tbar, increment=len(batch_result))
                             finally:
                                 self.sttn_inpaint.device = original_device
                                 self.sttn_inpaint.model = self.sttn_inpaint.model.to(original_device)
@@ -417,15 +422,13 @@ class STTNVideoInpaint:
                             inpainted_dict[i_frame] = all_frames[i_frame]
                     frames_in_interval = len(valid_indices)
                     frames_processed += frames_in_interval
-                    # Update real progress based on inpainted frames, not final writing
-                    if input_sub_remover is not None:
-                        input_sub_remover.update_progress(tbar, increment=frames_in_interval)
+                    # Progress already updated per batch; no additional increment here to avoid double-counting
                     print(f"[STTN] Finished interval {idx+1}/{len(self.frame_intervals)}: processed {frames_processed} frames so far.")
 
             # Now, write all frames in original order, using inpainted frames where available
             # This ensures the output video has the same frame order as the input video
             if input_sub_remover is not None:
-                input_sub_remover.set_stage('write', total_frames)
+                input_sub_remover.set_stage('write', total_frames, tbar)
             for i in range(total_frames):
                 if all_frames[i] is None:
                     if show_tqdm:
