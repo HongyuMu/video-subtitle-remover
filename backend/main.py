@@ -9,6 +9,10 @@ import sys
 import json
 from functools import cached_property
 from collections import Counter
+import unicodedata
+from collections import namedtuple
+from Levenshtein import ratio
+import pysrt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1234,7 +1238,120 @@ class SubtitleExtractor:
         self.video_path = video_path
         video_cap = cv2.VideoCapture(video_path)
         self.frame_count = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT) + 0.5)
+        self.fps = video_cap.get(cv2.CAP_PROP_FPS)
         video_cap.release()
+
+    def generate_subtitle_file(self):
+        """
+        Generates an SRT format subtitle file from the raw OCR data.
+        """
+        subtitle_content = self._remove_duplicate_subtitle()
+        srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
+        
+        with open(srt_filename, mode='w', encoding='utf-8') as f:
+            for index, content in enumerate(subtitle_content):
+                line_code = index + 1
+                frame_start = self._frame_to_timecode(int(content[0]))
+                frame_end = self._frame_to_timecode(int(content[1]))
+                
+                # Ensure subtitle duration is at least 1 second
+                if abs(int(content[1]) - int(content[0])) < self.fps:
+                    frame_end = self._frame_to_timecode(int(int(content[0]) + self.fps))
+
+                srt_coordinate = content[2]
+                frame_content = content[3]
+                subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
+                f.write(subtitle_line)
+        print(f"Subtitle file generated at: {srt_filename}")
+        return srt_filename
+
+    def _frame_to_timecode(self, frame_no):
+        """
+        Converts a frame number to an SRT timecode.
+        """
+        cap = cv2.VideoCapture(self.video_path)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+        ret, _ = cap.read()
+        milliseconds = cap.get(cv2.CAP_PROP_POS_MSEC) if ret else 0
+        cap.release()
+
+        if milliseconds <= 0:
+            seconds = frame_no / self.fps
+            milliseconds = (seconds - int(seconds)) * 1000
+            seconds = int(seconds)
+        else:
+            seconds = milliseconds // 1000
+            milliseconds = int(milliseconds % 1000)
+
+        minutes = int(seconds // 60)
+        seconds = int(seconds % 60)
+        hours = int(minutes // 60)
+        minutes = int(minutes % 60)
+
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+    def _remove_duplicate_subtitle(self):
+        """
+        Reads the raw subtitle file, removes duplicate lines, and returns a clean list.
+        """
+        self._concat_content_with_same_frameno()
+        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
+            lines = r.readlines()
+
+        RawInfo = namedtuple('RawInfo', 'no coordinate content')
+        content_list = []
+        for line in lines:
+            parts = line.strip().split('\t')
+            if len(parts) == 3:
+                content_list.append(RawInfo(parts[0], parts[1], parts[2]))
+
+        unique_subtitle_list = []
+        idx_i = 0
+        while idx_i < len(content_list):
+            i = content_list[idx_i]
+            start_frame = i.no
+            idx_j = idx_i
+            while idx_j < len(content_list):
+                if (idx_j + 1 == len(content_list) or 
+                    ratio(i.content.replace(' ', ''), content_list[idx_j + 1].content.replace(' ', '')) < config.THRESHOLD_TEXT_SIMILARITY):
+                    
+                    end_frame = content_list[idx_j].no
+                    similar_list = content_list[idx_i:idx_j + 1]
+                    # Find the longest text in the similar group to use as the subtitle
+                    index, _ = max(enumerate([item.content.replace(' ', '') for item in similar_list]), key=lambda x: len(x[1]))
+                    
+                    unique_subtitle_list.append((start_frame, end_frame, similar_list[index].coordinate, similar_list[index].content))
+                    idx_i = idx_j + 1
+                    break
+                else:
+                    idx_j += 1
+        return unique_subtitle_list
+
+    def _concat_content_with_same_frameno(self):
+        """
+        Merges subtitle lines that have the same frame number.
+        """
+        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
+            lines = r.readlines()
+        
+        content_map = {}
+        for line in lines:
+            parts = line.strip().split('\t')
+            if len(parts) == 3:
+                frame_no, coordinate, content = parts
+                if frame_no not in content_map:
+                    content_map[frame_no] = []
+                content_map[frame_no].append((coordinate, content))
+
+        with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
+            for frame_no, items in content_map.items():
+                if len(items) > 1:
+                    # For simplicity, we take the first coordinate and concatenate content
+                    coordinate = items[0][0]
+                    content = ' '.join([item[1] for item in items])
+                    f.write(f'{frame_no}\t{coordinate}\t{unicodedata.normalize("NFKC", content)}\n')
+                else:
+                    f.write(f'{frame_no}\t{items[0][0]}\t{unicodedata.normalize("NFKC", items[0][1])}\n')
 
     def _detect_watermark_area(self):
         """
