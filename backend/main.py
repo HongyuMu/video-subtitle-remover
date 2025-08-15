@@ -1254,16 +1254,21 @@ class SubtitleExtractor:
                 frame_start = self._frame_to_timecode(int(content[0]))
                 frame_end = self._frame_to_timecode(int(content[1]))
                 
-                # Ensure subtitle duration is at least 1 second
-                if abs(int(content[1]) - int(content[0])) < self.fps:
-                    frame_end = self._frame_to_timecode(int(int(content[0]) + self.fps))
-
                 srt_coordinate = content[2]
                 frame_content = content[3]
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
                 f.write(subtitle_line)
         print(f"Subtitle file generated at: {srt_filename}")
         return srt_filename
+
+    @staticmethod
+    def srt2txt(srt_file):
+        subs = pysrt.open(srt_file, encoding='utf-8')
+        output_path = os.path.join(os.path.dirname(srt_file), Path(srt_file).stem + '.txt')
+        print(output_path)
+        with open(output_path, 'w') as f:
+            for sub in subs:
+                f.write(f'{sub.text}\n')
 
     def _frame_to_timecode(self, frame_no):
         """
