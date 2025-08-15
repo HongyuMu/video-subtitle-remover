@@ -26,8 +26,14 @@ LAMA_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'big-lama')
 STTN_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'sttn', 'infer_model.pth')
 VIDEO_INPAINT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'video')
 MODEL_VERSION = 'V4'
+# Default language for OCR. Can be changed to 'en', 'japan', 'korean', etc.
+REC_CHAR_TYPE = 'ch'
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
+REC_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+REC_IMAGE_SHAPE = '3,48,320'
+# --- End OCR Model Settings ---
+
 
 # 查看该路径下是否有模型完整文件，没有的话合并小文件生成完整文件
 if 'big-lama.pt' not in (os.listdir(LAMA_MODEL_PATH)):
@@ -59,7 +65,7 @@ if 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'
 os.chmod(FFMPEG_PATH, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-# 是否使用ONNX(DirectML/AMD/Intel)
+# Whether to use ONNX for acceleration on non-Nvidia GPUs (DirectML, AMD, Intel, Apple)
 ONNX_PROVIDERS = []
 available_providers = ort.get_available_providers()
 for provider in available_providers:
@@ -105,6 +111,20 @@ MODE可选算法类型
 """
 # 【设置inpaint算法】
 MODE = InpaintMode.STTN
+
+# ×××××××××× OCR Settings start ××××××××××
+# For each image, recognize text in up to 6 text boxes simultaneously. The larger the GPU memory, the larger this value can be set.
+REC_BATCH_NUM = 6
+# How many images are recognized in each batch of the DB algorithm, the default is 10
+MAX_BATCH_SIZE = 10
+# Do not accept subtitles with a confidence level lower than 0.75
+DROP_SCORE = 0.75
+# Allowed deviation of the subtitle area, 0 means no out-of-bounds allowed, 0.03 means 3% out-of-bounds is allowed
+SUB_AREA_DEVIATION_RATE = 0
+# Output lost subtitle frames, only valid for Simplified Chinese, Traditional Chinese, Japanese, Korean. Default debug info is output to: video path/loss
+DEBUG_OCR_LOSS = False
+# ×××××××××× OCR Settings end ××××××××××
+
 # 【设置像素点偏差】
 # 用于判断是不是非字幕区域(一般认为字幕文本框的长度是要大于宽度的，如果字幕框的高大于宽，且大于的幅度超过指定像素点大小，则认为是错误检测)
 THRESHOLD_HEIGHT_WIDTH_DIFFERENCE = 10
