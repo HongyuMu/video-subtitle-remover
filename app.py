@@ -582,7 +582,7 @@ def process_video(video_path, json_path, output_path, status_file):
                 os.remove(path)
 
 
-@app.get("/status/{status_filename}")
+@app.get("/status/{status_filename}", include_in_schema=False)
 async def get_status(status_filename: str):
     status_path = PROCESSED_DIR / status_filename
     if not status_path.exists():

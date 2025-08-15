@@ -715,15 +715,21 @@ class SubtitleRemover:
                 return end_no
         return -1
 
-    def set_stage(self, stage: str, total: int):
+    def set_stage(self, stage: str, total: int, tbar=None):
         # Initialize stage and totals
         self.stage = stage
         if stage == 'inpaint':
             self.total_inpaint_frames = total or 0
             self.processed_inpaint_frames = 0
+            if tbar:
+                tbar.set_description("Inpainting frames")
+                tbar.reset(total=self.total_inpaint_frames)
         elif stage == 'write':
             self.total_write_frames = total or 0
             self.processed_write_frames = 0
+            if tbar:
+                tbar.set_description("Writing video")
+                tbar.reset(total=self.total_write_frames)
         # Emit initial status snapshot
         if self.status_file_path:
             try:
@@ -1078,8 +1084,7 @@ class SubtitleRemover:
             self.distinct_coords = [self.sub_area]
             self.frame_intervals = [(1, self.frame_count)]
             print(f"[User Area] Using user-provided subtitle area for all frames: {self.sub_area}")
-        tbar = tqdm(total=int(self.frame_count), unit='frame', position=0, file=sys.__stdout__,
-                    desc='Subtitle Removing')
+        tbar = tqdm(unit='frame', position=0, file=sys.__stdout__, desc='Processing video')
         if self.is_picture:
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             self.lama_inpaint = LamaInpaint()
