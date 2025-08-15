@@ -29,8 +29,40 @@ MODEL_VERSION = 'V4'
 # Default language for OCR. Can be changed to 'en', 'japan', 'korean', etc.
 REC_CHAR_TYPE = 'ch'
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
+REC_MODEL_BASE = os.path.join(BASE_DIR, 'models')
+
+# --- Language & Model Path Settings ---
+# All supported languages
+LATIN_LANG = [
+    'af', 'az', 'bs', 'cs', 'cy', 'da', 'de', 'es', 'et', 'fr', 'ga', 'hr',
+    'hu', 'id', 'is', 'it', 'ku', 'la', 'lt', 'lv', 'mi', 'ms', 'mt', 'nl',
+    'no', 'oc', 'pi', 'pl', 'pt', 'ro', 'rs_latin', 'sk', 'sl', 'sq', 'sv',
+    'sw', 'tl', 'tr', 'uz', 'vi', 'latin', 'german', 'french'
+]
+ARABIC_LANG = ['ar', 'fa', 'ug', 'ur']
+CYRILLIC_LANG = [
+    'ru', 'rs_cyrillic', 'be', 'bg', 'uk', 'mn', 'abq', 'ady', 'kbd', 'ava',
+    'dar', 'inh', 'che', 'lbe', 'lez', 'tab', 'cyrillic'
+]
+DEVANAGARI_LANG = [
+    'hi', 'mr', 'ne', 'bh', 'mai', 'ang', 'bho', 'mah', 'sck', 'new', 'gom',
+    'sa', 'bgc', 'devanagari'
+]
+CJK_LANG = ['ch', 'japan', 'korean', 'chinese_cht']
+
+# Set model paths based on language
 DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
-REC_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+if REC_CHAR_TYPE in LATIN_LANG:
+    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'latin_rec_fast')
+elif REC_CHAR_TYPE in ARABIC_LANG:
+    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'arabic_rec_fast')
+elif REC_CHAR_TYPE in CYRILLIC_LANG:
+    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'cyrillic_rec_fast')
+elif REC_CHAR_TYPE in DEVANAGARI_LANG:
+    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'devanagari_rec_fast')
+else: # Default to specific language model (ch, en, etc.)
+    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+
 REC_IMAGE_SHAPE = '3,48,320'
 # --- End OCR Model Settings ---
 
