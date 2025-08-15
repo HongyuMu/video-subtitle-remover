@@ -1254,7 +1254,6 @@ class SubtitleExtractor:
                 frame_start = self._frame_to_timecode(int(content[0]))
                 frame_end = self._frame_to_timecode(int(content[1]))
                 
-                srt_coordinate = content[2]
                 frame_content = content[3]
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n'
                 f.write(subtitle_line)
@@ -1294,6 +1293,9 @@ class SubtitleExtractor:
         minutes = int(minutes % 60)
 
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
+
+    def _frameno_to_milliseconds(self, frame_no):
+        return float(int(frame_no / self.fps * 1000))
 
     def _remove_duplicate_subtitle(self):
         """
