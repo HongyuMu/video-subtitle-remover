@@ -7,7 +7,6 @@ import shutil
 import tempfile
 import multiprocessing
 from backend.main import SubtitleExtractor
-from backend.tools import subtitle_ocr
 
 from numpy._core.numeric import False_
 from backend.main import SubtitleRemover, SubtitleDetect
@@ -957,91 +956,28 @@ async def merge_similar_intervals(task_id: str):
 
 def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
     """
-    Background task to perform OCR, generate SRT, and then convert to TXT.
+    Background task to perform subtitle extraction and generate SRT and TXT files.
     """
-    task_name = os.path.basename(video_path)
     try:
-        raw_subtitle_path = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
-        
-        # Configure OCR options
-        options = {
-            'REC_CHAR_TYPE': config.REC_CHAR_TYPE,
-            'DROP_SCORE': config.DROP_SCORE,
-            'SUB_AREA_DEVIATION_RATE': config.SUB_AREA_DEVIATION_RATE,
-            'DEBUG_OCR_LOSS': config.DEBUG_OCR_LOSS
-        }
-
-        # Start the asynchronous OCR process
-        process, task_queue, progress_queue = subtitle_ocr.async_start(
-            video_path,
-            raw_subtitle_path,
-            None, # No pre-defined sub area
-            options
-        )
-
-        # Feed frames to the OCR process
-        cap = cv2.VideoCapture(video_path)
-        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        
-        current_frame_no = 0
-        while cap.isOpened():
-            ret, _ = cap.read()
-            if not ret:
-                break
-            current_frame_no += 1
-            task = (frame_count, current_frame_no, None, None, None, None)
-            task_queue.put(task)
-            # Skip frames based on extract frequency
-            for _ in range(int(fps // config.EXTRACT_FREQUENCY) - 1):
-                if cap.isOpened():
-                    cap.read()
-                    current_frame_no += 1
-        
-        cap.release()
-        
-        # Signal end of tasks
-        task_queue.put((frame_count, -1, None, None, None, None))
-        
-        # Progress monitoring loop
-        while process.is_alive():
-            try:
-                # Non-blocking get from queue
-                progress_frame = progress_queue.get(timeout=1)
-                if frame_count > 0:
-                    percent = int((progress_frame / frame_count) * 100)
-                    with open(status_path, 'w') as f:
-                        json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
-            except queue.Empty:
-                # This is expected when the producer is slower than the monitor
-                continue
-        
-        process.join()
-
-        # Clean up multiprocessing queues to prevent resource leaks
-        task_queue.close()
-        progress_queue.close()
-        task_queue.join_thread()
-        progress_queue.join_thread()
-
-        # Generate SRT and then TXT
-        with open(status_path, 'w') as f:
-            json.dump({"status": "Generating Subtitles", "stage": "Post-processing", "progress": 100}, f)
-
-        extractor = SubtitleExtractor(raw_subtitle_path, video_path)
+        # The new SubtitleExtractor handles everything internally
+        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path)
         generated_srt_path = extractor.generate_subtitle_file()
-        extractor.srt2txt(generated_srt_path)
-        
-        # Move final txt file to its destination
-        final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
-        shutil.move(final_txt_path, txt_path)
 
-        # Final status update
-        TASK_RESULTS[task_id]['status'] = 'Generation Complete'
-        TASK_RESULTS[task_id]['txt_path'] = txt_path
-        with open(status_path, 'w') as f:
-            json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
-        
+        if generated_srt_path and os.path.exists(generated_srt_path):
+            # Generate TXT from SRT
+            extractor.srt2txt(generated_srt_path)
+            
+            # Move final txt file to its destination
+            final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
+            shutil.move(final_txt_path, txt_path)
+
+            # Final status update
+            TASK_RESULTS[task_id]['status'] = 'Generation Complete'
+            TASK_RESULTS[task_id]['txt_path'] = txt_path
+            with open(status_path, 'w') as f:
+                json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
+        else:
+            raise Exception("Subtitle file could not be generated.")
 
     except Exception as e:
         if task_id in TASK_RESULTS:
@@ -1050,9 +986,10 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
         with open(status_path, 'w') as f:
             json.dump({"status": "Error", "message": str(e)}, f)
     finally:
-        # Clean up temporary raw subtitle file
-        if 'raw_subtitle_path' in locals() and os.path.exists(raw_subtitle_path):
-            os.remove(raw_subtitle_path)
+        # Clean up temporary raw subtitle file if created
+        if 'extractor' in locals() and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
+            if os.path.exists(extractor.raw_subtitle_path) and "tmp" in extractor.raw_subtitle_path:
+                os.remove(extractor.raw_subtitle_path)
         if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
             os.remove(generated_srt_path)
 
@@ -1096,4 +1033,4 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8002)
