@@ -21,14 +21,33 @@ import asyncio
 import io
 import time
 import psutil
+import logging
+import logging.handlers
+import queue
 from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 from backend.main import find_smallest_bounding_box
+import traceback
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
+
+# Set up logging
+LOG_DIR = Path(os.getcwd()) / "logs"
+LOG_DIR.mkdir(exist_ok=True)
+log_file = LOG_DIR / "app.log"
+# Use a rotating file handler to prevent log file from growing too large
+file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=1024*1024*5, backupCount=3)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(process)d - %(levelname)s - %(message)s",
+    handlers=[
+        file_handler,
+        logging.StreamHandler() # Also print to console
+    ]
+)
 
 @app.get("/")
 async def root():
@@ -428,7 +447,23 @@ async def get_task_info(task_id: str, request: Request):
             "editor_url": str(request.url_for('get_editor', task_id=task_id))
         }
 
-    elif status == "Error":
+    elif status == "Generating Subtitles":
+        status_file_path = result.get("generation_status_file")
+        if status_file_path and os.path.exists(status_file_path):
+            try:
+                with open(status_file_path, 'r') as f:
+                    return json.load(f)
+            except (IOError, json.JSONDecodeError):
+                pass # Fallback if file is empty or corrupt
+        return {"status": "Generating Subtitles...", "progress": 0}
+    
+    elif status == "Generation Complete":
+        return {
+            "status": "Generation Complete",
+            "download_url": f"/download_subtitle_text/{task_id}"
+        }
+
+    elif status == "Error" or status == "Generation Error":
         return {"status": "Error", "message": result.get("error", "An unknown error occurred.")}
     
     return {"status": "Unknown"}
@@ -616,6 +651,27 @@ async def download_video(video_filename: str):
     if not video_path.exists():
         return JSONResponse(content={"error": "Processed video file not found!"})
     return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
+
+
+@app.get("/download_subtitle_text/{task_id}")
+async def download_subtitle_text(task_id: str):
+    """
+    Downloads the generated subtitle text file for a given task.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result or result.get("status") != "Generation Complete":
+        raise HTTPException(status_code=404, detail="Subtitle text file not ready or task not found.")
+
+    txt_path = result.get("txt_path")
+    if not txt_path or not os.path.exists(txt_path):
+        raise HTTPException(status_code=404, detail="Subtitle text file not found.")
+    
+    original_stem = result.get("original_filename", "unknown")
+    return FileResponse(
+        path=txt_path,
+        media_type='text/plain',
+        filename=f"{original_stem}_subtitles.txt"
+    )
 
 
 @app.get("/stream_video/{task_id}", include_in_schema=False)
@@ -916,12 +972,19 @@ async def merge_similar_intervals(task_id: str):
     }
 
 
-def generate_subtitle_task(video_path: str, srt_path: str, txt_path: str):
+def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
     """
     Background task to perform OCR, generate SRT, and then convert to TXT.
     """
+    task_name = os.path.basename(video_path)
+    logging.info(f"---[{task_id}] Starting subtitle generation task for: {task_name} ---")
     try:
+        # 1. Log configuration
+        logging.info(f"[{task_id}] [CONFIG] GPU Enabled: {config.USE_GPU}")
+        logging.info(f"[{task_id}] [CONFIG] ONNX Providers: {config.ONNX_PROVIDERS}")
+        
         raw_subtitle_path = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
+        logging.info(f"[{task_id}] [STEP 1] Created temporary raw subtitle file: {raw_subtitle_path}")
         
         # Configure OCR options
         options = {
@@ -932,14 +995,17 @@ def generate_subtitle_task(video_path: str, srt_path: str, txt_path: str):
         }
 
         # Start the asynchronous OCR process
+        logging.info(f"[{task_id}] [STEP 2] Starting asynchronous OCR process...")
         process, task_queue, progress_queue = subtitle_ocr.async_start(
             video_path,
             raw_subtitle_path,
             None, # No pre-defined sub area
             options
         )
+        logging.info(f"[{task_id}] OCR process started with PID: {process.pid}")
 
         # Feed frames to the OCR process
+        logging.info(f"[{task_id}] [STEP 3] Feeding video frames to OCR process...")
         cap = cv2.VideoCapture(video_path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -959,32 +1025,75 @@ def generate_subtitle_task(video_path: str, srt_path: str, txt_path: str):
                     current_frame_no += 1
         
         cap.release()
+        logging.info(f"[{task_id}] Finished feeding {current_frame_no}/{frame_count} frames.")
+        
+        # Signal end of tasks
         task_queue.put((frame_count, -1, None, None, None, None))
+        logging.info(f"[{task_id}] [STEP 4] Waiting for OCR process to complete...")
+        
+        # Progress monitoring loop
+        while process.is_alive():
+            try:
+                # Non-blocking get from queue
+                progress_frame = progress_queue.get(timeout=1)
+                if frame_count > 0:
+                    percent = int((progress_frame / frame_count) * 100)
+                    with open(status_path, 'w') as f:
+                        json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
+            except queue.Empty:
+                # This is expected when the producer is slower than the monitor
+                continue
+            except Exception as e:
+                logging.warning(f"[{task_id}] Error reading progress queue: {e}")
+        
         process.join()
+        logging.info(f"[{task_id}] OCR process finished.")
 
         # Generate SRT and then TXT
+        logging.info(f"[{task_id}] [STEP 5] Generating SRT and TXT files...")
+        with open(status_path, 'w') as f:
+            json.dump({"status": "Generating Subtitles", "stage": "Post-processing", "progress": 100}, f)
+
         extractor = SubtitleExtractor(raw_subtitle_path, video_path)
         generated_srt_path = extractor.generate_subtitle_file()
+        logging.info(f"[{task_id}] SRT file generated at: {generated_srt_path}")
         extractor.srt2txt(generated_srt_path)
-
+        
         # Move final txt file to its destination
         final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
+        logging.info(f"[{task_id}] [STEP 6] Moving TXT file from {final_txt_path} to final destination: {txt_path}")
         shutil.move(final_txt_path, txt_path)
 
+        # Final status update
+        TASK_RESULTS[task_id]['status'] = 'Generation Complete'
+        TASK_RESULTS[task_id]['txt_path'] = txt_path
+        with open(status_path, 'w') as f:
+            json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
+        
+        logging.info(f"---[{task_id}] Subtitle generation task finished successfully. ---")
+
     except Exception as e:
-        print(f"Error in subtitle generation task: {e}")
+        logging.error(f"[{task_id}] Error in subtitle generation task: {e}")
+        logging.error(f"[{task_id}] Traceback: {traceback.format_exc()}")
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id]['status'] = 'Generation Error'
+            TASK_RESULTS[task_id]['error'] = traceback.format_exc()
+        with open(status_path, 'w') as f:
+            json.dump({"status": "Error", "message": str(e)}, f)
     finally:
         # Clean up temporary raw subtitle file
-        if os.path.exists(raw_subtitle_path):
+        logging.info(f"[{task_id}] [CLEANUP] Removing temporary files...")
+        if 'raw_subtitle_path' in locals() and os.path.exists(raw_subtitle_path):
             os.remove(raw_subtitle_path)
-        if os.path.exists(srt_path):
-            os.remove(srt_path)
+        if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
+            os.remove(generated_srt_path)
 
 
 @app.post("/generate_subtitle_text/{task_id}")
 async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
     """
-    Generates and returns a downloadable TXT file with subtitle content.
+    Generates a downloadable TXT file with subtitle content.
+    This is now an async operation. Poll /task_info/{task_id} for status.
     """
     result = TASK_RESULTS.get(task_id)
     if not result or not result.get("video_path"):
@@ -996,28 +1105,26 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
     # Define paths for the final SRT and TXT files
     srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
     txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
+    status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
+
+    # Update task status to generating
+    result["status"] = "Generating Subtitles"
+    result["generation_status_file"] = str(status_path)
 
     # Run the entire OCR and text generation process in the background
     background_tasks.add_task(
         generate_subtitle_task,
+        task_id=task_id,
         video_path=video_path,
         srt_path=str(srt_path),
-        txt_path=str(txt_path)
+        txt_path=str(txt_path),
+        status_path=str(status_path)
     )
 
-    # Poll until the txt file is created
-    timeout = 300  # 5 minutes timeout
-    start_time = time.time()
-    while not os.path.exists(txt_path):
-        await asyncio.sleep(1)
-        if time.time() - start_time > timeout:
-            raise HTTPException(status_code=504, detail="Subtitle generation timed out.")
-
-    return FileResponse(
-        path=txt_path,
-        media_type='text/plain',
-        filename=f"{original_stem}_subtitles.txt"
-    )
+    return {
+        "message": "Subtitle generation started. Poll /task_info/{task_id} for progress.",
+        "task_id": task_id
+    }
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")

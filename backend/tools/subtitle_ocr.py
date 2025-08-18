@@ -109,14 +109,17 @@ def paint_opencv(im, text, pos, color):
     if config.REC_CHAR_TYPE in config.CJK_LANG:
         try:
             font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'NotoSansCJK-Bold.otf')
-            font = ImageFont.truetype(font_path, 20)
-            img_pil = Image.fromarray(im)
-            draw = ImageDraw.Draw(img_pil)
-            draw.text(pos, text, font=font, fill=color)
-            return np.asarray(img_pil)
+            if os.path.exists(font_path):
+                font = ImageFont.truetype(font_path, 20)
+                img_pil = Image.fromarray(im)
+                draw = ImageDraw.Draw(img_pil)
+                draw.text(pos, text, font=font, fill=color)
+                return np.asarray(img_pil)
+            else:
+                 print("Warning: NotoSansCJK-Bold.otf not found. Using default font for debug overlay.")
         except OSError:
             # Fallback to default font if CJK font is not found
-            print("Warning: NotoSansCJK-Bold.otf not found. Using default font for debug overlay.")
+            print("Warning: NotoSansCJK-Bold.otf could not be loaded. Using default font for debug overlay.")
             pass
 
     # For non-CJK languages or as a fallback, use OpenCV's default font

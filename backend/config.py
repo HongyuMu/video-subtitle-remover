@@ -8,6 +8,8 @@ import platform
 import stat
 from fsplit.filesplit import Filesplit
 import onnxruntime as ort
+import paddle
+import configparser
 
 # 项目版本号
 VERSION = "1.1.1"
@@ -31,8 +33,97 @@ REC_CHAR_TYPE = 'ch'
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 REC_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 
+settings_config = configparser.ConfigParser()
+MODE_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'settings.ini')
+if not os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'settings.ini')):
+    # 如果没有配置文件，默认使用中文
+    with open(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'settings.ini'), mode='w', encoding='utf-8') as f:
+        f.write('[DEFAULT]\n')
+        f.write('Interface = 简体中文\n')
+        f.write('Language = ch\n')
+        f.write('Mode = fast')
+settings_config.read(MODE_CONFIG_PATH, encoding='utf-8')
+
+interface_config = configparser.ConfigParser()
+INTERFACE_KEY_NAME_MAP = {
+    '简体中文': 'ch',
+    '繁體中文': 'chinese_cht',
+    'English': 'en',
+    '한국어': 'ko',
+    '日本語': 'japan',
+    'Tiếng Việt': 'vi',
+    'Español': 'es'
+}
+interface_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interface',
+                              f"{INTERFACE_KEY_NAME_MAP[settings_config['DEFAULT']['Interface']]}.ini")
+interface_config.read(interface_file, encoding='utf-8')
+
+USE_GPU = False
+# 如果paddlepaddle编译了gpu的版本
+if paddle.is_compiled_with_cuda():
+    # 查看是否有可用的gpu
+    if len(paddle.static.cuda_places()) > 0:
+        # 如果有GPU则使用GPU
+        USE_GPU = True
+# Whether to use ONNX for acceleration on non-Nvidia GPUs (DirectML, AMD, Intel, Apple)
+ONNX_PROVIDERS = []
+if USE_GPU == False:
+    try:
+        import onnxruntime as ort
+        available_providers = ort.get_available_providers()
+        for provider in available_providers:
+            if provider in [
+                "CPUExecutionProvider"
+            ]:
+                continue
+            if provider not in [
+                "DmlExecutionProvider",         # DirectML，适用于 Windows GPU
+                "ROCMExecutionProvider",        # AMD ROCm
+                "MIGraphXExecutionProvider",    # AMD MIGraphX
+                # "VitisAIExecutionProvider",   # AMD VitisAI，适用于 RyzenAI & Windows
+                "OpenVINOExecutionProvider",    # Intel GPU
+                "MetalExecutionProvider",       # Apple macOS
+                "CoreMLExecutionProvider",      # Apple macOS
+                "CUDAExecutionProvider",        # Nvidia GPU
+            ]:
+                print(interface_config['Main']['OnnxExectionProviderNotSupportedSkipped'].format(provider))
+                continue
+            print(interface_config['Main']['OnnxExecutionProviderDetected'].format(provider))
+            ONNX_PROVIDERS.append(provider)
+    except ModuleNotFoundError as e:
+        print(interface_config['Main']['OnnxRuntimeNotInstall'])
+if len(ONNX_PROVIDERS) > 0:
+    USE_GPU = True
+
 # --- Language & Model Path Settings ---
 # All supported languages
+# 设置识别语言
+REC_CHAR_TYPE = settings_config['DEFAULT']['Language']
+
+# 设置识别模式
+MODE_TYPE = settings_config['DEFAULT']['Mode']
+ACCURATE_MODE_ON = False
+if MODE_TYPE == 'accurate':
+    ACCURATE_MODE_ON = True
+if MODE_TYPE == 'fast':
+    ACCURATE_MODE_ON = False
+if MODE_TYPE == 'auto':
+    if USE_GPU:
+        ACCURATE_MODE_ON = True
+    else:
+        ACCURATE_MODE_ON = False
+# 模型文件目录
+# 默认模型版本 V4
+MODEL_VERSION = 'V4'
+# 文本检测模型
+DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
+# 设置文本识别模型 + 字典
+REC_MODEL_BASE = os.path.join(BASE_DIR, 'models')
+# V3, V4模型默认图形识别的shape为3, 48, 320
+REC_IMAGE_SHAPE = '3,48,320'
+REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_det')
+
 LATIN_LANG = [
     'af', 'az', 'bs', 'cs', 'cy', 'da', 'de', 'es', 'et', 'fr', 'ga', 'hr',
     'hu', 'id', 'is', 'it', 'ku', 'la', 'lt', 'lv', 'mi', 'ms', 'mt', 'nl',
@@ -48,75 +139,74 @@ DEVANAGARI_LANG = [
     'hi', 'mr', 'ne', 'bh', 'mai', 'ang', 'bho', 'mah', 'sck', 'new', 'gom',
     'sa', 'bgc', 'devanagari'
 ]
-CJK_LANG = ['ch', 'japan', 'korean', 'chinese_cht']
+OTHER_LANG = [
+    'ch', 'japan', 'korean', 'en', 'ta', 'kn', 'te', 'ka',
+    'chinese_cht',
+]
+MULTI_LANG = LATIN_LANG + ARABIC_LANG + CYRILLIC_LANG + DEVANAGARI_LANG + \
+             OTHER_LANG
 
-# Set model paths based on language
-DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
-if REC_CHAR_TYPE in LATIN_LANG:
-    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'latin_rec_fast')
-elif REC_CHAR_TYPE in ARABIC_LANG:
-    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'arabic_rec_fast')
-elif REC_CHAR_TYPE in CYRILLIC_LANG:
-    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'cyrillic_rec_fast')
-elif REC_CHAR_TYPE in DEVANAGARI_LANG:
-    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'devanagari_rec_fast')
-else: # Default to specific language model (ch, en, etc.)
-    REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
-
-REC_IMAGE_SHAPE = '3,48,320'
-# --- End OCR Model Settings ---
+DET_MODEL_FAST_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det_fast')
 
 
-# 查看该路径下是否有模型完整文件，没有的话合并小文件生成完整文件
-if 'big-lama.pt' not in (os.listdir(LAMA_MODEL_PATH)):
-    fs = Filesplit()
-    fs.merge(input_dir=LAMA_MODEL_PATH)
+# 如果设置了识别文本语言类型，则设置为对应的语言
+if REC_CHAR_TYPE in MULTI_LANG:
+    # 定义文本检测与识别模型
+    # 使用快速模式时，调用轻量级模型
+    if MODE_TYPE == 'fast':
+        DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det_fast')
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec_fast')
+    # 使用自动模式时，检测有没有使用GPU，根据GPU判断模型
+    elif MODE_TYPE == 'auto':
+        # 如果使用GPU，则使用大模型
+        if USE_GPU:
+            DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
+            # 英文模式的ch模型识别效果好于fast
+            if REC_CHAR_TYPE == 'en':
+                REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'ch_rec')
+            else:
+                REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+        else:
+            DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det_fast')
+            REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec_fast')
+    else:
+        DET_MODEL_PATH = os.path.join(DET_MODEL_BASE, MODEL_VERSION, 'ch_det')
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+    # 如果默认版本(V4)没有大模型，则切换为默认版本(V4)的fast模型
+    if not os.path.exists(REC_MODEL_PATH):
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec_fast')
+    # 如果默认版本(V4)既没有大模型，又没有fast模型，则使用V3版本的大模型
+    if not os.path.exists(REC_MODEL_PATH):
+        MODEL_VERSION = 'V3'
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec')
+    # 如果V3版本没有大模型，则使用V3版本的fast模型
+    if not os.path.exists(REC_MODEL_PATH):
+        MODEL_VERSION = 'V3'
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'{REC_CHAR_TYPE}_rec_fast')
 
-if 'inference.pdiparams' not in os.listdir(DET_MODEL_PATH):
-    fs = Filesplit()
-    fs.merge(input_dir=DET_MODEL_PATH)
+    if REC_CHAR_TYPE in LATIN_LANG:
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'latin_rec_fast')
+    elif REC_CHAR_TYPE in ARABIC_LANG:
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'arabic_rec_fast')
+    elif REC_CHAR_TYPE in CYRILLIC_LANG:
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'cyrillic_rec_fast')
+    elif REC_CHAR_TYPE in DEVANAGARI_LANG:
+        REC_MODEL_PATH = os.path.join(REC_MODEL_BASE, MODEL_VERSION, f'devanagari_rec_fast')
 
-if 'ProPainter.pth' not in os.listdir(VIDEO_INPAINT_MODEL_PATH):
-    fs = Filesplit()
-    fs.merge(input_dir=VIDEO_INPAINT_MODEL_PATH)
+    # 定义图像识别shape
+    if MODEL_VERSION == 'V2':
+        REC_IMAGE_SHAPE = '3,32,320'
+    else:
+        REC_IMAGE_SHAPE = '3,48,320'
 
-# 指定ffmpeg可执行程序路径
-sys_str = platform.system()
-if sys_str == "Windows":
-    ffmpeg_bin = os.path.join('win_x64', 'ffmpeg.exe')
-elif sys_str == "Linux":
-    ffmpeg_bin = os.path.join('linux_x64', 'ffmpeg')
-else:
-    ffmpeg_bin = os.path.join('macos', 'ffmpeg')
-FFMPEG_PATH = os.path.join(BASE_DIR, '', 'ffmpeg', ffmpeg_bin)
-
-if 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64')):
-    fs = Filesplit()
-    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'))
-# 将ffmpeg添加可执行权限
-os.chmod(FFMPEG_PATH, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
-os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
-
-# Whether to use ONNX for acceleration on non-Nvidia GPUs (DirectML, AMD, Intel, Apple)
-ONNX_PROVIDERS = []
-available_providers = ort.get_available_providers()
-for provider in available_providers:
-    if provider in [
-        "CPUExecutionProvider"
-    ]:
-        continue
-    if provider not in [
-        "DmlExecutionProvider",         # DirectML，适用于 Windows GPU
-        "ROCMExecutionProvider",        # AMD ROCm
-        "MIGraphXExecutionProvider",    # AMD MIGraphX
-        "VitisAIExecutionProvider",     # AMD VitisAI，适用于 RyzenAI & Windows, 实测和DirectML性能似乎差不多
-        "OpenVINOExecutionProvider",    # Intel GPU
-        "MetalExecutionProvider",       # Apple macOS
-        "CoreMLExecutionProvider",      # Apple macOS
-        "CUDAExecutionProvider",        # Nvidia GPU
-    ]:
-        continue
-    ONNX_PROVIDERS.append(provider)
+    # 查看该路径下是否有文本模型识别完整文件，没有的话合并小文件生成完整文件
+    if 'inference.pdiparams' not in (os.listdir(REC_MODEL_PATH)):
+        fs = Filesplit()
+        fs.merge(input_dir=REC_MODEL_PATH)
+    # 查看该路径下是否有文本模型识别完整文件，没有的话合并小文件生成完整文件
+    if 'inference.pdiparams' not in (os.listdir(DET_MODEL_PATH)):
+        fs = Filesplit()
+        fs.merge(input_dir=DET_MODEL_PATH)
 # ×××××××××××××××××××× [不要改] end ××××××××××××××××××××
 
 
