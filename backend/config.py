@@ -10,6 +10,7 @@ from fsplit.filesplit import Filesplit
 import onnxruntime as ort
 import paddle
 import configparser
+from pathlib import Path
 
 # 项目版本号
 VERSION = "1.1.1"
@@ -23,7 +24,7 @@ try:
 except:
     USE_DML = False
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = str(Path(os.path.abspath(__file__)).parent)
 LAMA_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'big-lama')
 STTN_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'sttn', 'infer_model.pth')
 VIDEO_INPAINT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'video')
