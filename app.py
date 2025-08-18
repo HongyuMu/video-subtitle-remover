@@ -21,8 +21,6 @@ import asyncio
 import io
 import time
 import psutil
-import logging
-import logging.handlers
 import queue
 from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
@@ -33,21 +31,6 @@ import traceback
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
-
-# Set up logging
-LOG_DIR = Path(os.getcwd()) / "logs"
-LOG_DIR.mkdir(exist_ok=True)
-log_file = LOG_DIR / "app.log"
-# Use a rotating file handler to prevent log file from growing too large
-file_handler = logging.handlers.RotatingFileHandler(log_file, maxBytes=1024*1024*5, backupCount=3)
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(process)d - %(levelname)s - %(message)s",
-    handlers=[
-        file_handler,
-        logging.StreamHandler() # Also print to console
-    ]
-)
 
 @app.get("/")
 async def root():
@@ -977,14 +960,8 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
     Background task to perform OCR, generate SRT, and then convert to TXT.
     """
     task_name = os.path.basename(video_path)
-    logging.info(f"---[{task_id}] Starting subtitle generation task for: {task_name} ---")
     try:
-        # 1. Log configuration
-        logging.info(f"[{task_id}] [CONFIG] GPU Enabled: {config.USE_GPU}")
-        logging.info(f"[{task_id}] [CONFIG] ONNX Providers: {config.ONNX_PROVIDERS}")
-        
         raw_subtitle_path = tempfile.NamedTemporaryFile(suffix='.txt', delete=False).name
-        logging.info(f"[{task_id}] [STEP 1] Created temporary raw subtitle file: {raw_subtitle_path}")
         
         # Configure OCR options
         options = {
@@ -995,17 +972,14 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
         }
 
         # Start the asynchronous OCR process
-        logging.info(f"[{task_id}] [STEP 2] Starting asynchronous OCR process...")
         process, task_queue, progress_queue = subtitle_ocr.async_start(
             video_path,
             raw_subtitle_path,
             None, # No pre-defined sub area
             options
         )
-        logging.info(f"[{task_id}] OCR process started with PID: {process.pid}")
 
         # Feed frames to the OCR process
-        logging.info(f"[{task_id}] [STEP 3] Feeding video frames to OCR process...")
         cap = cv2.VideoCapture(video_path)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
@@ -1025,11 +999,9 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
                     current_frame_no += 1
         
         cap.release()
-        logging.info(f"[{task_id}] Finished feeding {current_frame_no}/{frame_count} frames.")
         
         # Signal end of tasks
         task_queue.put((frame_count, -1, None, None, None, None))
-        logging.info(f"[{task_id}] [STEP 4] Waiting for OCR process to complete...")
         
         # Progress monitoring loop
         while process.is_alive():
@@ -1043,25 +1015,25 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
             except queue.Empty:
                 # This is expected when the producer is slower than the monitor
                 continue
-            except Exception as e:
-                logging.warning(f"[{task_id}] Error reading progress queue: {e}")
         
         process.join()
-        logging.info(f"[{task_id}] OCR process finished.")
+
+        # Clean up multiprocessing queues to prevent resource leaks
+        task_queue.close()
+        progress_queue.close()
+        task_queue.join_thread()
+        progress_queue.join_thread()
 
         # Generate SRT and then TXT
-        logging.info(f"[{task_id}] [STEP 5] Generating SRT and TXT files...")
         with open(status_path, 'w') as f:
             json.dump({"status": "Generating Subtitles", "stage": "Post-processing", "progress": 100}, f)
 
         extractor = SubtitleExtractor(raw_subtitle_path, video_path)
         generated_srt_path = extractor.generate_subtitle_file()
-        logging.info(f"[{task_id}] SRT file generated at: {generated_srt_path}")
         extractor.srt2txt(generated_srt_path)
         
         # Move final txt file to its destination
         final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
-        logging.info(f"[{task_id}] [STEP 6] Moving TXT file from {final_txt_path} to final destination: {txt_path}")
         shutil.move(final_txt_path, txt_path)
 
         # Final status update
@@ -1070,11 +1042,8 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
         with open(status_path, 'w') as f:
             json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
         
-        logging.info(f"---[{task_id}] Subtitle generation task finished successfully. ---")
 
     except Exception as e:
-        logging.error(f"[{task_id}] Error in subtitle generation task: {e}")
-        logging.error(f"[{task_id}] Traceback: {traceback.format_exc()}")
         if task_id in TASK_RESULTS:
             TASK_RESULTS[task_id]['status'] = 'Generation Error'
             TASK_RESULTS[task_id]['error'] = traceback.format_exc()
@@ -1082,7 +1051,6 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
             json.dump({"status": "Error", "message": str(e)}, f)
     finally:
         # Clean up temporary raw subtitle file
-        logging.info(f"[{task_id}] [CLEANUP] Removing temporary files...")
         if 'raw_subtitle_path' in locals() and os.path.exists(raw_subtitle_path):
             os.remove(raw_subtitle_path)
         if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
