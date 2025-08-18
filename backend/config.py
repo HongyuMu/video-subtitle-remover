@@ -112,9 +112,8 @@ if MODE_TYPE == 'auto':
         ACCURATE_MODE_ON = True
     else:
         ACCURATE_MODE_ON = False
+        
 # 模型文件目录
-# 默认模型版本 V4
-MODEL_VERSION = 'V4'
 # 文本检测模型
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 # 设置文本识别模型 + 字典
