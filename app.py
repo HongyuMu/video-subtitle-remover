@@ -33,7 +33,11 @@ templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
 async def root():
-    return {"Message": "Visit docs to remove subtitles in your videos!"}
+    return RedirectResponse(url="/upload")
+
+@app.get("/upload", response_class=HTMLResponse)
+async def upload_page(request: Request):
+    return templates.TemplateResponse("upload.html", {"request": request})
 
 # Use absolute paths to avoid working directory issues
 PROCESSED_DIR = Path(os.getcwd()) / "processed_videos"
@@ -213,6 +217,41 @@ async def find_subtitles(
         "message": "Subtitle detection started.",
         "task_id": task_id
     }
+
+
+@app.post("/upload-and-edit")
+async def upload_and_edit(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    file: UploadFile = File(...)
+):
+    """
+    A user-friendly endpoint that accepts a video, starts the detection
+    process, and returns a page that polls for completion and then redirects.
+    """
+    temp_video_path = save_temp_file(file)
+    task_id = str(uuid.uuid4())
+    status_file = PROCESSED_DIR / f"detect_{task_id}.status"
+
+    TASK_RESULTS[task_id] = {
+        "status": "Detecting",
+        "timestamp": time.time(),
+        "original_filename": Path(file.filename).stem,
+        "status_file": str(status_file),
+        "video_path": temp_video_path,
+    }
+
+    background_tasks.add_task(
+        detect_subtitles_task,
+        task_id=task_id,
+        temp_video_path=temp_video_path,
+        status_file=str(status_file)
+    )
+
+    return templates.TemplateResponse("processing.html", {
+        "request": request,
+        "task_id": task_id
+    })
 
 
 def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
