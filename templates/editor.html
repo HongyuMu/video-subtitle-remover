@@ -1129,10 +1129,9 @@
         splitIntervalBtn.onclick = async () => {
             const currentFrame0 = getCurrentFrame();
             
-            // The user intends to split *after* the current frame.
-            // The backend's `split_frame` parameter defines the *start* of the second new interval.
-            // Therefore, we must send the index of the next frame.
-            const splitFrame = currentFrame0 + 1;
+            // The backend's `split_frame` parameter defines the start of the second new interval.
+            // By sending the current frame, we split the interval *at* the current frame.
+            const splitFrame = currentFrame0;
 
             const interval = intervals[currentIntervalIdx];
             const startFrame = interval.frame_range[0];
