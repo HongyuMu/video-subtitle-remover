@@ -1,5 +1,5 @@
 import os
-import config
+from backend import config
 import importlib
 from paddleocr import PaddleOCR
 
