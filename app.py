@@ -215,6 +215,83 @@ async def find_subtitles(
     }
 
 
+def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
+    """
+    A background task that runs the entire subtitle detection pipeline.
+    It updates the shared TASK_RESULTS dictionary upon completion.
+    """
+    try:
+        # Initialize status file for frontend polling
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Detecting...", "progress": 0}, f)
+        
+        # --- Start of detection logic ---
+        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_file)
+        if not subtitle_frame_no_box_dict:
+            raise ValueError("No subtitles found in the video.")
+
+        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+        
+        cap = cv2.VideoCapture(temp_video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        cap.release()
+
+        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
+        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        
+        merged_intervals = []
+        if sub_frame_no_list_continuous:
+            merged_intervals.append(sub_frame_no_list_continuous[0])
+            for i in range(1, len(sub_frame_no_list_continuous)):
+                last_start, last_end = merged_intervals[-1]
+                current_start, current_end = sub_frame_no_list_continuous[i]
+                if (current_start - last_end <= 3):
+                    merged_intervals[-1] = (last_start, current_end)
+                else:
+                    merged_intervals.append((current_start, current_end))
+        sub_frame_no_list_continuous = merged_intervals
+
+        distinct_coords = []
+        for start, end in sub_frame_no_list_continuous:
+            coords_in_interval = [first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict]
+            if coords_in_interval:
+                unified_box = find_smallest_bounding_box(coords_in_interval)
+                distinct_coords.append(unified_box)
+            else:
+                distinct_coords.append(None)
+        # --- End of detection logic ---
+
+        # Update the task result with the final data
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id].update({
+                "status": "Completed",
+                "distinct_coords": distinct_coords,
+                "frame_intervals": sub_frame_no_list_continuous,
+                "video_width": video_width,
+                "video_height": video_height,
+                "fps": fps,
+                "total_frames": total_frames,
+            })
+
+        # Final status file update
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Completed"}, f)
+            
+    except Exception as e:
+        error_message = f"Error: {e}"
+        print(f"Error in detect_subtitles_task for task {task_id}: {error_message}")
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id].update({"status": "Error", "error": str(e)})
+        with open(status_file, 'w') as f:
+            json.dump({"status": error_message}, f)
+            
+
 @app.get("/subtitle_intervals/{task_id}", include_in_schema=False)
 async def get_subtitle_intervals(task_id: str):
     """
@@ -361,6 +438,84 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
+def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
+    """
+    Background task to perform subtitle extraction and generate SRT and TXT files.
+    """
+    try:
+        # The new SubtitleExtractor handles everything internally
+        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path)
+        generated_srt_path = extractor.generate_subtitle_file()
+
+        if generated_srt_path and os.path.exists(generated_srt_path):
+            # Generate TXT from SRT
+            extractor.srt2txt(generated_srt_path)
+            
+            # Move final txt file to its destination
+            final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
+            shutil.move(final_txt_path, txt_path)
+
+            # Final status update
+            TASK_RESULTS[task_id]['status'] = 'Generation Complete'
+            TASK_RESULTS[task_id]['txt_path'] = txt_path
+            with open(status_path, 'w') as f:
+                json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
+        else:
+            raise Exception("Subtitle file could not be generated.")
+
+    except Exception as e:
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id]['status'] = 'Generation Error'
+            TASK_RESULTS[task_id]['error'] = traceback.format_exc()
+        with open(status_path, 'w') as f:
+            json.dump({"status": "Error", "message": str(e)}, f)
+    finally:
+        # Clean up temporary raw subtitle file if created
+        if 'extractor' in locals() and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
+            if os.path.exists(extractor.raw_subtitle_path) and "tmp" in extractor.raw_subtitle_path:
+                os.remove(extractor.raw_subtitle_path)
+        if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
+            os.remove(generated_srt_path)
+
+
+@app.post("/generate_subtitle_text/{task_id}")
+async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
+    """
+    Generates a downloadable TXT file with subtitle content.
+    This is now an async operation. Poll /task_info/{task_id} for status.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result or not result.get("video_path"):
+        raise HTTPException(status_code=404, detail="Video for this task not found.")
+
+    video_path = result["video_path"]
+    original_stem = result.get("original_filename", "unknown")
+    
+    # Define paths for the final SRT and TXT files
+    srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
+    txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
+    status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
+
+    # Update task status to generating
+    result["status"] = "Generating Subtitles"
+    result["generation_status_file"] = str(status_path)
+
+    # Run the entire OCR and text generation process in the background
+    background_tasks.add_task(
+        generate_subtitle_task,
+        task_id=task_id,
+        video_path=video_path,
+        srt_path=str(srt_path),
+        txt_path=str(txt_path),
+        status_path=str(status_path)
+    )
+
+    return {
+        "message": "Subtitle generation started. Poll /task_info/{task_id} for progress.",
+        "task_id": task_id
+    }
+
+
 @app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=False)
 async def get_editor(task_id: str, request: Request, format: Optional[str] = None):
     """
@@ -497,82 +652,6 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
         "download_url": f"/download_video/{processed_video_path.name}"
     }
 
-
-def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
-    """
-    A background task that runs the entire subtitle detection pipeline.
-    It updates the shared TASK_RESULTS dictionary upon completion.
-    """
-    try:
-        # Initialize status file for frontend polling
-        with open(status_file, 'w') as f:
-            json.dump({"status": "Detecting...", "progress": 0}, f)
-        
-        # --- Start of detection logic ---
-        subtitle_detect = SubtitleDetect(video_path=temp_video_path)
-        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_file)
-        if not subtitle_frame_no_box_dict:
-            raise ValueError("No subtitles found in the video.")
-
-        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
-        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
-        
-        cap = cv2.VideoCapture(temp_video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        cap.release()
-
-        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
-        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
-        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
-        
-        merged_intervals = []
-        if sub_frame_no_list_continuous:
-            merged_intervals.append(sub_frame_no_list_continuous[0])
-            for i in range(1, len(sub_frame_no_list_continuous)):
-                last_start, last_end = merged_intervals[-1]
-                current_start, current_end = sub_frame_no_list_continuous[i]
-                if (current_start - last_end <= 3):
-                    merged_intervals[-1] = (last_start, current_end)
-                else:
-                    merged_intervals.append((current_start, current_end))
-        sub_frame_no_list_continuous = merged_intervals
-
-        distinct_coords = []
-        for start, end in sub_frame_no_list_continuous:
-            coords_in_interval = [first_entry_dict[i] for i in range(start, end + 1) if i in first_entry_dict]
-            if coords_in_interval:
-                unified_box = find_smallest_bounding_box(coords_in_interval)
-                distinct_coords.append(unified_box)
-            else:
-                distinct_coords.append(None)
-        # --- End of detection logic ---
-
-        # Update the task result with the final data
-        if task_id in TASK_RESULTS:
-            TASK_RESULTS[task_id].update({
-                "status": "Completed",
-                "distinct_coords": distinct_coords,
-                "frame_intervals": sub_frame_no_list_continuous,
-                "video_width": video_width,
-                "video_height": video_height,
-                "fps": fps,
-                "total_frames": total_frames,
-            })
-
-        # Final status file update
-        with open(status_file, 'w') as f:
-            json.dump({"status": "Completed"}, f)
-            
-    except Exception as e:
-        error_message = f"Error: {e}"
-        print(f"Error in detect_subtitles_task for task {task_id}: {error_message}")
-        if task_id in TASK_RESULTS:
-            TASK_RESULTS[task_id].update({"status": "Error", "error": str(e)})
-        with open(status_file, 'w') as f:
-            json.dump({"status": error_message}, f)
 
 # Call the SubtitleRemover class to remove subtitles
 def process_video(video_path, json_path, output_path, status_file):
@@ -960,83 +1039,6 @@ async def merge_similar_intervals(task_id: str):
         ]
     }
 
-
-def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
-    """
-    Background task to perform subtitle extraction and generate SRT and TXT files.
-    """
-    try:
-        # The new SubtitleExtractor handles everything internally
-        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path)
-        generated_srt_path = extractor.generate_subtitle_file()
-
-        if generated_srt_path and os.path.exists(generated_srt_path):
-            # Generate TXT from SRT
-            extractor.srt2txt(generated_srt_path)
-            
-            # Move final txt file to its destination
-            final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
-            shutil.move(final_txt_path, txt_path)
-
-            # Final status update
-            TASK_RESULTS[task_id]['status'] = 'Generation Complete'
-            TASK_RESULTS[task_id]['txt_path'] = txt_path
-            with open(status_path, 'w') as f:
-                json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
-        else:
-            raise Exception("Subtitle file could not be generated.")
-
-    except Exception as e:
-        if task_id in TASK_RESULTS:
-            TASK_RESULTS[task_id]['status'] = 'Generation Error'
-            TASK_RESULTS[task_id]['error'] = traceback.format_exc()
-        with open(status_path, 'w') as f:
-            json.dump({"status": "Error", "message": str(e)}, f)
-    finally:
-        # Clean up temporary raw subtitle file if created
-        if 'extractor' in locals() and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
-            if os.path.exists(extractor.raw_subtitle_path) and "tmp" in extractor.raw_subtitle_path:
-                os.remove(extractor.raw_subtitle_path)
-        if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
-            os.remove(generated_srt_path)
-
-
-@app.post("/generate_subtitle_text/{task_id}")
-async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
-    """
-    Generates a downloadable TXT file with subtitle content.
-    This is now an async operation. Poll /task_info/{task_id} for status.
-    """
-    result = TASK_RESULTS.get(task_id)
-    if not result or not result.get("video_path"):
-        raise HTTPException(status_code=404, detail="Video for this task not found.")
-
-    video_path = result["video_path"]
-    original_stem = result.get("original_filename", "unknown")
-    
-    # Define paths for the final SRT and TXT files
-    srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
-    txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
-    status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
-
-    # Update task status to generating
-    result["status"] = "Generating Subtitles"
-    result["generation_status_file"] = str(status_path)
-
-    # Run the entire OCR and text generation process in the background
-    background_tasks.add_task(
-        generate_subtitle_task,
-        task_id=task_id,
-        video_path=video_path,
-        srt_path=str(srt_path),
-        txt_path=str(txt_path),
-        status_path=str(status_path)
-    )
-
-    return {
-        "message": "Subtitle generation started. Poll /task_info/{task_id} for progress.",
-        "task_id": task_id
-    }
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("spawn")
