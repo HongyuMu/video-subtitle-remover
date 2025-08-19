@@ -509,17 +509,24 @@
             }
 
             let boxToDraw = null;
+            let activeIdx = -1;
 
-            if (video.paused && intervals[currentIntervalIdx]) {
-                // When paused, we are explicitly editing the current interval. Draw its box.
-                const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
-                boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+            if (video.paused) {
+                // When paused, always draw the box for the currently selected interval
+                activeIdx = currentIntervalIdx;
             } else {
-                // When playing, find the active interval based on the current frame.
-                const activeSub = parsedSubtitles.find(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
-                if (activeSub && activeSub.coords) {
-                    boxToDraw = activeSub.coords;
+                // When playing, find the interval corresponding to the current video frame
+                activeIdx = findActiveInterval(currentFrame);
+                // And if we play into a new interval, update the editor controls to match
+                if (activeIdx !== -1 && activeIdx !== currentIntervalIdx && !isUserScrubbing) {
+                    loadInterval(activeIdx, true);
                 }
+            }
+
+            // If we have a valid interval (either paused on one, or playing through one), get its coordinates
+            if (activeIdx !== -1 && intervals[activeIdx]) {
+                const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
+                boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
             }
 
             if (boxToDraw) {
@@ -1122,10 +1129,9 @@
         splitIntervalBtn.onclick = async () => {
             const currentFrame0 = getCurrentFrame();
             
-            // The user intends to split *after* the current frame.
-            // The backend's `split_frame` parameter defines the *start* of the second new interval.
-            // Therefore, we must send the index of the next frame.
-            const splitFrame = currentFrame0 + 1;
+            // The backend's `split_frame` parameter defines the start of the second new interval.
+            // By sending the current frame, we split the interval *at* the current frame.
+            const splitFrame = currentFrame0;
 
             const interval = intervals[currentIntervalIdx];
             const startFrame = interval.frame_range[0];
