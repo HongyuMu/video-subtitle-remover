@@ -27,7 +27,7 @@
             flex-direction: column;
             gap: 20px;
             width: 100%;
-            max-width: 1200px;
+            max-width: 1600px; /* Increased width for new panel */
         }
         .editor-header {
             text-align: center;
@@ -140,6 +140,38 @@
         /* Red actions */
         #reset-btn, #not-sub-btn { background-color: #dc3545; }
         #reset-btn:hover:not(:disabled), #not-sub-btn:hover:not(:disabled) { background-color: #bb2d3b; }
+
+        /* Styles for the new subtitle player */
+        .subtitle-player-container {
+            background-color: var(--editor-bg-color);
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            width: 380px;
+            flex: 0 0 380px;
+            height: 650px; /* Approximate height */
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+        #subtitle-player {
+            flex-grow: 1;
+        }
+        .subtitle-line {
+            padding: 8px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.2s, color 0.2s;
+            margin-bottom: 5px;
+            font-size: 0.9em;
+        }
+        .subtitle-line:hover {
+            background-color: #e9ecef;
+        }
+        .subtitle-line.active {
+            background-color: var(--primary-color);
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -222,6 +254,10 @@
                 </div>
                 <button id="finish-btn">Finish and Process</button>
             </div>
+            <div class="subtitle-player-container" style="display: none;">
+                <h3>Generated Subtitles</h3>
+                <div id="subtitle-player"></div>
+            </div>
         </div>
     </div>
 
@@ -239,6 +275,8 @@
         let currentImage = new Image(); // An image object to hold the current raw video frame
         let isUserScrubbing = false; // Flag to track when user is manually scrubbing timeline
         let isUpdated = false;
+        let parsedSubtitles = []; // Holds subtitles from the generated .txt file
+        let currentSubtitleIndex = -1; // Tracks the currently highlighted subtitle in the player
 
         // Helper function to disable controls during async operations like seeking
         function setControlsDisabled(disabled) {
@@ -280,6 +318,8 @@
         const notSubBtn = document.getElementById('not-sub-btn');
         const mergePrevBtn = document.getElementById('merge-prev-btn');
         const splitIntervalBtn = document.getElementById('split-interval-btn');
+        const subtitlePlayerContainer = document.querySelector('.subtitle-player-container');
+        const subtitlePlayer = document.getElementById('subtitle-player');
 
         // This is the main function that runs when the page first loads.
         async function initializeEditor() {
@@ -295,6 +335,10 @@
                 originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
                 taskInfo = infoData;
                 
+                if (infoData.status === 'Generation Complete' && infoData.download_url) {
+                    loadAndDisplaySubtitles(infoData.download_url);
+                }
+
                 updateSliderSteps();
 
                 // The seeking event is triggered when the user jumps to a new frame
@@ -445,6 +489,7 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             const currentFrame = getCurrentFrame();
+            const currentTime = video.currentTime;
             
             // Only update timeline if video is playing AND user is not manually scrubbing
             // This prevents the drawLoop from interfering with manual timeline scrubbing
@@ -454,26 +499,39 @@
 
             let boxToDraw = null;
 
-            if (video.paused && intervals[currentIntervalIdx]) {
-                // When paused, we are explicitly editing the current interval. Draw its box.
+            // --- Subtitle Viewer Logic ---
+            // Prioritize showing the generated subtitle box when playing
+            const activeSub = parsedSubtitles.find(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
+            if (activeSub && activeSub.coords) {
+                boxToDraw = activeSub.coords;
+            } 
+            // --- Subtitle Editor Logic ---
+            // Fallback to showing the editable box when paused
+            else if (video.paused && intervals[currentIntervalIdx]) {
                 const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
                 boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
-            } else {
-                // When playing, find the active interval based on the current frame.
-                const activeIdx = findActiveInterval(currentFrame);
-                if (activeIdx !== -1) {
-                    // Only auto-switch intervals while video is playing to avoid
-                    // fighting with manual navigation (Prev/Next, Split, etc.)
-                    if (activeIdx !== currentIntervalIdx && !isUserScrubbing) {
-                        loadInterval(activeIdx, true);
-                    }
-                    const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
-                    boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
-                }
             }
 
             if (boxToDraw) {
                 drawBoundingBox(boxToDraw);
+            }
+
+            // Sync subtitle player with video
+            if (parsedSubtitles && parsedSubtitles.length > 0) {
+                const activeSubIndex = parsedSubtitles.findIndex(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
+                if (activeSubIndex !== currentSubtitleIndex) {
+                    if (currentSubtitleIndex !== -1) {
+                        subtitlePlayer.children[currentSubtitleIndex]?.classList.remove('active');
+                    }
+                    if (activeSubIndex !== -1) {
+                        const activeLine = subtitlePlayer.children[activeSubIndex];
+                        if (activeLine) {
+                            activeLine.classList.add('active');
+                            activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                    currentSubtitleIndex = activeSubIndex;
+                }
             }
 
             requestAnimationFrame(drawLoop);
@@ -1203,6 +1261,83 @@
                 }
             }
         };
+
+        // --- NEW SUBTITLE PLAYER FUNCTIONS ---
+        async function loadAndDisplaySubtitles(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Failed to fetch subtitles: ${response.statusText}`);
+                const subtitleText = await response.text();
+                
+                parsedSubtitles = parseSubtitleFile(subtitleText);
+                populateSubtitlePlayer(parsedSubtitles);
+                subtitlePlayerContainer.style.display = 'flex';
+            } catch (error) {
+                console.error("Could not load subtitles:", error);
+            }
+        }
+
+        function timecodeToSeconds(timecode) {
+            const parts = timecode.split(/[:,]/);
+            if (parts.length !== 4) return 0;
+            const hours = parseInt(parts[0], 10);
+            const minutes = parseInt(parts[1], 10);
+            const seconds = parseInt(parts[2], 10);
+            const milliseconds = parseInt(parts[3], 10);
+            return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+        }
+
+        function parseCoords(coordString) {
+            // Example: (Coordinates: (12, 461, 989, 1026))
+            const match = coordString.match(/\((\d+), (\d+), (\d+), (\d+)\)/);
+            if (match) {
+                const [_, xmin, xmax, ymin, ymax] = match.map(Number);
+                return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+            }
+            return null;
+        }
+
+        function parseSubtitleFile(text) {
+            const subs = [];
+            const blocks = text.trim().split(/\n\n+/);
+            for (const block of blocks) {
+                const lines = block.trim().split('\n');
+                if (lines.length < 3) continue;
+
+                const index = parseInt(lines[0], 10);
+                const timeParts = lines[1].split(' --> ');
+                if (timeParts.length !== 2) continue;
+
+                const startTime = timecodeToSeconds(timeParts[0]);
+                const endTime = timecodeToSeconds(timeParts[1]);
+                
+                const coordLineIndex = lines.findIndex(l => l.startsWith('(Coordinates:'));
+                const textLines = lines.slice(2, coordLineIndex !== -1 ? coordLineIndex : lines.length);
+                const textContent = textLines.join('\n');
+                const coords = coordLineIndex !== -1 ? parseCoords(lines[coordLineIndex]) : null;
+
+                subs.push({ index, startTime, endTime, text: textContent, coords });
+            }
+            return subs;
+        }
+        
+        function populateSubtitlePlayer(subtitles) {
+            subtitlePlayer.innerHTML = ''; // Clear existing
+            subtitles.forEach(sub => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'subtitle-line';
+                lineDiv.textContent = sub.text;
+                lineDiv.onclick = () => onSubtitleClick(sub.startTime);
+                subtitlePlayer.appendChild(lineDiv);
+            });
+        }
+
+        function onSubtitleClick(startTime) {
+            video.currentTime = startTime;
+            if (video.paused) {
+                 // The drawLoop will handle drawing the box
+            }
+        }
 
         // --- START THE APPLICATION ---
         
