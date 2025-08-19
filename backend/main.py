@@ -1277,10 +1277,10 @@ class SubtitleExtractor:
         if not first_entry_dict:
             return "" # No subtitles to process
 
-        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        # sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
         all_boxes = []
-        for frame_boxes in sub_frame_no_list_continuous.values():
-            all_boxes.extend(frame_boxes)
+        for frame_box in first_entry_dict.values():
+            all_boxes.append(frame_box)
         universal_box = find_smallest_bounding_box(all_boxes)
 
         if status_path:
@@ -1303,7 +1303,7 @@ class SubtitleExtractor:
         crop_xmax = min(self.frame_width, xmax + padding)
         crop_ymax = min(self.frame_height, ymax + padding)
 
-        sorted_frames = sorted(sub_frame_no_list_continuous.keys())
+        sorted_frames = sorted(first_entry_dict.keys())
         total_frames_to_ocr = len(sorted_frames)
         processed_frames = 0
 
