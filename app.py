@@ -442,7 +442,14 @@ async def get_task_info(task_id: str, request: Request):
     elif status == "Generation Complete":
         return {
             "status": "Generation Complete",
-            "download_url": f"/download_subtitle_text/{task_id}"
+            "download_url": f"/download_subtitle_text/{task_id}",
+            "video_width": result.get("video_width"),
+            "video_height": result.get("video_height"),
+            "original_filename": result.get("original_filename"),
+            "user_id": result.get("user_id"),
+            "fps": result.get("fps"),
+            "total_frames": result.get("total_frames"),
+            "editor_url": str(request.url_for('get_editor', task_id=task_id))
         }
 
     elif status == "Error" or status == "Generation Error":
