@@ -235,7 +235,7 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
         complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
         
         cap = cv2.VideoCapture(temp_video_path)
-        fps = cap.get(cv2.CAP_PROP_FPS)
+        fps = round(cap.get(cv2.CAP_PROP_FPS), 2)
         video_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         video_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
