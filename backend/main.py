@@ -1268,10 +1268,20 @@ class SubtitleExtractor:
             complete_subtitle_frame_no_box_dict, self.fps
         )
         
-
         if not correct_subtitle_frame_no_box_dict:
             print("No subtitles left after filtering.")
             return ""
+
+        # Consolidate subtitle areas into unified intervals for more stable OCR
+        first_entry_dict = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        if not first_entry_dict:
+            return "" # No subtitles to process
+
+        sub_frame_no_list_continuous = subtitle_detect.find_continuous_ranges_with_same_mask(first_entry_dict)
+        all_boxes = []
+        for frame_boxes in sub_frame_no_list_continuous.values():
+            all_boxes.extend(frame_boxes)
+        universal_box = find_smallest_bounding_box(all_boxes)
 
         if status_path:
             try:
@@ -1284,46 +1294,43 @@ class SubtitleExtractor:
         temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
         video_cap = cv2.VideoCapture(self.video_path)
 
-        print("Performing OCR on detected subtitle regions...")
-        sorted_frames = sorted(correct_subtitle_frame_no_box_dict.keys())
+        print("Performing OCR on the universal subtitle region...")
+
+        xmin, xmax, ymin, ymax = universal_box
+        padding = 10
+        crop_xmin = max(0, xmin - padding)
+        crop_ymin = max(0, ymin - padding)
+        crop_xmax = min(self.frame_width, xmax + padding)
+        crop_ymax = min(self.frame_height, ymax + padding)
+
+        sorted_frames = sorted(sub_frame_no_list_continuous.keys())
         total_frames_to_ocr = len(sorted_frames)
         processed_frames = 0
 
-        for frame_no in tqdm(sorted_frames, desc="OCR on Subtitle Regions"):
-            boxes = correct_subtitle_frame_no_box_dict.get(frame_no)
-            if not boxes:
-                continue
-
+        for frame_no in tqdm(sorted_frames, desc="OCR on Universal Region"):
             video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
             ret, frame = video_cap.read()
             if not ret:
+                processed_frames += 1
                 continue
-
-            for box in boxes:
-                xmin, xmax, ymin, ymax = box
-                padding = 10
-                crop_xmin = max(0, xmin - padding)
-                crop_ymin = max(0, ymin - padding)
-                crop_xmax = min(self.frame_width, xmax + padding)
-                crop_ymax = min(self.frame_height, ymax + padding)
-
-                cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-
-                if cropped_frame.size == 0:
-                    continue
-
-                dt_box, rec_res = text_recogniser.predict(cropped_frame)
-
-                if rec_res:
-                    # Adjust coordinates back to full frame
-                    recognized_coordinates = get_coordinates(dt_box)
-                    for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
-                        full_frame_coords = (
-                            b_xmin + crop_xmin, b_xmax + crop_xmin,
-                            b_ymin + crop_ymin, b_ymax + crop_ymin
-                        )
-                        temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
             
+            cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
+
+            if cropped_frame.size == 0:
+                processed_frames += 1
+                continue
+            
+            dt_box, rec_res = text_recogniser.predict(cropped_frame)
+
+            if rec_res:
+                recognized_coordinates = get_coordinates(dt_box)
+                for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
+                    full_frame_coords = (
+                        b_xmin + crop_xmin, b_xmax + crop_xmin,
+                        b_ymin + crop_ymin, b_ymax + crop_ymin
+                    )
+                    temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
+
             processed_frames += 1
             if status_path and total_frames_to_ocr > 0:
                 try:
