@@ -1132,7 +1132,7 @@
             const currentFrame0 = getCurrentFrame();
             
             // The backend's `split_frame` parameter defines the start of the second new interval.
-            // By sending the current frame, we split the interval *at* the current frame.
+            // By sending the current frame as 1-based index, we split the interval *at* the current frame.
             const splitFrame = currentFrame0;
 
             const interval = intervals[currentIntervalIdx];
