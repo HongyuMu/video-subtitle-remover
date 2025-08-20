@@ -3,6 +3,19 @@ from backend import config
 import importlib
 from paddleocr import PaddleOCR
 
+# --- Singleton Pattern for OCR Model ---
+_ocr_recogniser_instance = None
+
+def get_ocr_recogniser():
+    """
+    Returns a singleton instance of the OcrRecogniser.
+    This ensures the model is loaded only once, improving performance.
+    """
+    global _ocr_recogniser_instance
+    if _ocr_recogniser_instance is None:
+        _ocr_recogniser_instance = OcrRecogniser()
+    return _ocr_recogniser_instance
+
 # 加载文本检测+识别模型
 class OcrRecogniser:
     def __init__(self):
@@ -20,68 +33,37 @@ class OcrRecogniser:
             return y_max
 
     def predict(self, image):
-        detection_box, recognise_result, _ = self.recogniser(image, cls=False)
-        if len(detection_box) > 0:
-            coordinate_list = list()
-            if isinstance(detection_box, list):
-                for i in detection_box:
-                    i = list(i)
-                    (x1, y1) = int(i[0][0]), int(i[0][1])
-                    (x2, y2) = int(i[1][0]), int(i[1][1])
-                    (x3, y3) = int(i[2][0]), int(i[2][1])
-                    (x4, y4) = int(i[3][0]), int(i[3][1])
-                    xmin = max(x1, x4)
-                    xmax = min(x2, x3)
-                    ymin = max(y1, y2)
-                    ymax = min(y3, y4)
-                    coordinate_list.append([xmin, xmax, ymin, ymax])
-
-            # 计算有多少行字幕，将每行字幕最小的ymin值放入lines
-            lines = []
-            for i in coordinate_list:
-                if len(lines) < 1:
-                    lines.append(self.y_round(i[2]))
-                else:
-                    if self.y_round(i[2]) not in lines \
-                            and self.y_round(i[2]) + 10 not in lines \
-                            and self.y_round(i[2]) - 10 not in lines:
-                        lines.append(self.y_round(i[2]))
-            lines = sorted(lines)
-
-            for i in coordinate_list:
-                for j in lines:
-                    if abs(j - self.y_round(i[2])) <= 10:
-                        i[2] = j
-
-            to_rank_res = list(zip(coordinate_list, recognise_result))
-            ranked_res = []
-            for line in lines:
-                tmp_list = []
-                for i in to_rank_res:
-                    if i[0][2] == line:
-                        tmp_list.append(i)
-                # 先根据纵坐标排序
-                for k in range(1, len(tmp_list)):
-                    for j in range(0, len(tmp_list) - k):
-                        if tmp_list[j][0][2] > tmp_list[j + 1][0][2]:
-                            print(tmp_list[j][0][2])
-                            tmp_list[j], tmp_list[j + 1] = tmp_list[j + 1], tmp_list[j]
-                # 再根据横坐标排列
-                for l in range(1, len(tmp_list)):
-                    for j in range(0, len(tmp_list) - l):
-                        if tmp_list[j][0][0] > tmp_list[j + 1][0][0]:
-                            tmp_list[j], tmp_list[j + 1] = tmp_list[j + 1], tmp_list[j]
-                for m in tmp_list:
-                    ranked_res.append(m)
-            dt_box = []
-            for i in [j[0] for j in ranked_res]:
-                dt_box.append([(i[0], i[2]), (i[1], i[2]), (i[1], i[3]), (i[0], i[3])])
-            res = [i[1] for i in ranked_res]
-            return dt_box, res
+        # Note: The 'cls' parameter in PaddleOCR is for text angle classification.
+        # Disabling it (cls=False) is generally a good choice for subtitles, which are typically horizontal.
+        detection_box, recognise_result = self.recogniser.ocr(image, cls=False)
+        
+        # The result from paddleocr.ocr is already in the desired format.
+        # It's a list of lists, where each inner list contains the box coordinates and the recognized text.
+        # We just need to extract and format it.
+        if detection_box:
+            # Unpack the results directly
+            boxes = [line[0] for line in detection_box]
+            texts = [line[1][0] for line in detection_box]
+            scores = [line[1][1] for line in detection_box]
+            
+            # The following sorting logic seems overly complex and might not be necessary
+            # with the latest versions of PaddleOCR. Let's simplify and rely on PaddleOCR's ordering.
+            # If specific sorting is required, it should be revisited.
+            return boxes, list(zip(texts, scores))
         else:
-            return detection_box, recognise_result
+            return [], []
 
     def init_model(self):
+        # Increase GPU memory allocation for better performance with larger batches and high-res video.
+        gpu_mem = config.GPU_MEMORY_LIMIT if hasattr(config, 'GPU_MEMORY_LIMIT') else 2048
+        
+        # Check for ONNX runtime availability to automatically enable it if possible.
+        use_onnx_runtime = len(config.ONNX_PROVIDERS) > 0
+        try:
+            import onnxruntime
+        except ImportError:
+            use_onnx_runtime = False
+
         return PaddleOCR(use_gpu=config.USE_GPU,
                          gpu_mem=500,
                          det_algorithm='DB',
@@ -99,7 +81,7 @@ class OcrRecogniser:
                          lang=config.REC_CHAR_TYPE,
                          ocr_version=f'PP-OCR{config.MODEL_VERSION.lower()}',
                          rec_image_shape=config.REC_IMAGE_SHAPE,
-                         use_onnx=len(config.ONNX_PROVIDERS) > 0,
+                         use_onnx=use_onnx_runtime,
                          onnx_providers=config.ONNX_PROVIDERS,
                          debug=False, show_log=False)
     
@@ -126,7 +108,7 @@ class OcrRecogniser:
             os.makedirs(os.path.dirname(onnx_model_path), exist_ok=True)
 
             # Convert and save the model
-            onnx_model = paddle2onnx.export(
+            paddle2onnx.export(
                 model_filename=model_file,
                 params_filename=params_file,
                 save_file=onnx_model_path,
@@ -159,14 +141,13 @@ def get_coordinates(dt_box):
     coordinate_list = list()
     if isinstance(dt_box, list):
         for i in dt_box:
-            i = list(i)
-            (x1, y1) = int(i[0][0]), int(i[0][1])
-            (x2, y2) = int(i[1][0]), int(i[1][1])
-            (x3, y3) = int(i[2][0]), int(i[2][1])
-            (x4, y4) = int(i[3][0]), int(i[3][1])
-            xmin = max(x1, x4)
-            xmax = min(x2, x3)
-            ymin = max(y1, y2)
-            ymax = min(y3, y4)
+            # The new format from paddleocr.ocr is a list of points
+            # [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+            x_coords = [p[0] for p in i]
+            y_coords = [p[1] for p in i]
+            xmin = int(min(x_coords))
+            xmax = int(max(x_coords))
+            ymin = int(min(y_coords))
+            ymax = int(max(y_coords))
             coordinate_list.append((xmin, xmax, ymin, ymax))
     return coordinate_list

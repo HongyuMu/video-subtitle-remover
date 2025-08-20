@@ -24,7 +24,7 @@ import queue
 from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-from fastapi import Request
+from fastapi import Request, Form
 from backend.main import find_smallest_bounding_box
 import traceback
 
@@ -223,20 +223,41 @@ async def find_subtitles(
 async def upload_and_edit(
     background_tasks: BackgroundTasks,
     request: Request,
-    file: UploadFile = File(...)
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    cloud_ref: Optional[str] = Form(None)
 ):
     """
     A user-friendly endpoint that accepts a video, starts the detection
     process, and returns a page that polls for completion and then redirects.
     """
-    temp_video_path = save_temp_file(file)
+    # --- 1. Handle Video Input ---
+    temp_video_path = None
+    original_name = "unknown_file"
+
+    if len([source for source in [file, url, cloud_ref] if source]) != 1:
+        raise HTTPException(status_code=400, detail="Please provide exactly one video source (file, url, or cloud_ref).")
+
+    if file and file.filename:
+        original_name = Path(file.filename).stem
+        temp_video_path = save_temp_file(file)
+    elif url:
+        original_name = Path(url).stem
+        temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+        await download_file(url, temp_video_path)
+    elif cloud_ref:
+        original_name = Path(cloud_ref).stem
+        temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+        await download_file(cloud_ref, temp_video_path)
+
+    # --- 2. Setup and Start Background Task ---
     task_id = str(uuid.uuid4())
     status_file = PROCESSED_DIR / f"detect_{task_id}.status"
 
     TASK_RESULTS[task_id] = {
         "status": "Detecting",
         "timestamp": time.time(),
-        "original_filename": Path(file.filename).stem,
+        "original_filename": original_name,
         "status_file": str(status_file),
         "video_path": temp_video_path,
     }

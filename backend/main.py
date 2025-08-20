@@ -13,7 +13,7 @@ import unicodedata
 from collections import namedtuple
 from Levenshtein import ratio
 import pysrt
-from backend.tools.ocr import OcrRecogniser, get_coordinates
+from backend.tools.ocr import get_ocr_recogniser, get_coordinates
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1269,7 +1269,7 @@ class SubtitleExtractor:
             except Exception:
                 pass
 
-        text_recogniser = OcrRecogniser()
+        text_recogniser = get_ocr_recogniser()
         temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
         video_cap = cv2.VideoCapture(self.video_path)
 
