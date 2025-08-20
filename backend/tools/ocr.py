@@ -35,21 +35,13 @@ class OcrRecogniser:
     def predict(self, image):
         # Note: The 'cls' parameter in PaddleOCR is for text angle classification.
         # Disabling it (cls=False) is generally a good choice for subtitles, which are typically horizontal.
-        detection_box, recognise_result = self.recogniser.ocr(image, cls=False)
+        detection_box, recognise_result, _ = self.recogniser(image, cls=False)
         
-        # The result from paddleocr.ocr is already in the desired format.
-        # It's a list of lists, where each inner list contains the box coordinates and the recognized text.
-        # We just need to extract and format it.
+        # The result from paddleocr is a list of detection boxes and a list of (text, score) tuples.
         if detection_box:
-            # Unpack the results directly
-            boxes = [line[0] for line in detection_box]
-            texts = [line[1][0] for line in detection_box]
-            scores = [line[1][1] for line in detection_box]
-            
-            # The following sorting logic seems overly complex and might not be necessary
-            # with the latest versions of PaddleOCR. Let's simplify and rely on PaddleOCR's ordering.
-            # If specific sorting is required, it should be revisited.
-            return boxes, list(zip(texts, scores))
+            # The results are already in the format we need.
+            # `detection_box` is a list of boxes, and `recognise_result` is a list of (text, score) tuples.
+            return detection_box, recognise_result
         else:
             return [], []
 
