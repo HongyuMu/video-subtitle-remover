@@ -312,6 +312,7 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
                 "status": "Completed",
                 "distinct_coords": distinct_coords,
                 "frame_intervals": sub_frame_no_list_continuous,
+                "detected_areas": first_entry_dict,
                 "video_width": video_width,
                 "video_height": video_height,
                 "fps": fps,
@@ -477,13 +478,13 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
+def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str, detected_areas: dict):
     """
     Background task to perform subtitle extraction and generate SRT and TXT files.
     """
     try:
         # The new SubtitleExtractor handles everything internally
-        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path)
+        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path, detected_areas=detected_areas)
         generated_srt_path = extractor.generate_subtitle_file()
 
         if generated_srt_path and os.path.exists(generated_srt_path):
@@ -546,7 +547,8 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
         video_path=video_path,
         srt_path=str(srt_path),
         txt_path=str(txt_path),
-        status_path=str(status_path)
+        status_path=str(status_path),
+        detected_areas=result.get("detected_areas", {})
     )
 
     return {
