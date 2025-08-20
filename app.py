@@ -27,6 +27,8 @@ from fastapi.responses import HTMLResponse
 from fastapi import Request, Form
 from backend.main import find_smallest_bounding_box
 import traceback
+from backend.tools.ocr import OcrRecogniser, get_coordinates
+from tqdm import tqdm
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -311,28 +313,58 @@ def full_pipeline_task(
         })
         
         # --- 2. Run Subtitle Detection ---
-        detect_subtitles_task(task_id, temp_video_path, status_file)
+        TASK_RESULTS[task_id]['status'] = "Detecting"
+        detection_results = detect_subtitles_task(task_id, temp_video_path, status_file)
+        if not detection_results:
+            raise Exception("Subtitle detection failed.")
+        
+        (
+            detected_areas,
+            distinct_coords,
+            frame_intervals,
+            video_width,
+            video_height,
+            fps,
+            total_frames
+        ) = detection_results
 
+        # Update task result with the final data from detection
+        TASK_RESULTS[task_id].update({
+            "distinct_coords": distinct_coords,
+            "frame_intervals": frame_intervals,
+            "video_width": video_width,
+            "video_height": video_height,
+            "fps": fps,
+            "total_frames": total_frames,
+        })
+        
         # --- 3. Run Subtitle Generation ---
         result = TASK_RESULTS.get(task_id)
-        if result and result.get("status") == "Completed":
-            video_path = result["video_path"]
-            original_stem = result.get("original_filename", "unknown")
-            
-            srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
-            txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
-            status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
 
-            result["status"] = "Generating Subtitles"
-            result["generation_status_file"] = str(status_path)
+        # Calculate the universal bounding box from all detected areas
+        if not detected_areas:
+            raise Exception("No subtitle areas detected to generate text from.")
+        universal_box = find_smallest_bounding_box(list(detected_areas.values()))
 
-            generate_subtitle_task(
-                task_id=task_id,
-                video_path=video_path,
-                srt_path=str(srt_path),
-                txt_path=str(txt_path),
-                status_path=str(status_path)
-            )
+        video_path = result["video_path"]
+        original_stem = result.get("original_filename", "unknown")
+        
+        srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
+        txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
+        status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
+
+        result["status"] = "Generating Subtitles"
+        result["generation_status_file"] = str(status_path)
+
+        generate_subtitle_task(
+            task_id=task_id,
+            video_path=video_path,
+            srt_path=str(srt_path),
+            txt_path=str(txt_path),
+            status_path=str(status_path),
+            detected_areas=detected_areas,
+            universal_box=universal_box
+        )
 
     except Exception as e:
         error_message = f"Error in full pipeline: {e}"
@@ -393,23 +425,20 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
                 distinct_coords.append(unified_box)
             else:
                 distinct_coords.append(None)
-        # --- End of detection logic ---
-
-        # Update the task result with the final data
-        if task_id in TASK_RESULTS:
-            TASK_RESULTS[task_id].update({
-                "status": "Completed",
-                "distinct_coords": distinct_coords,
-                "frame_intervals": sub_frame_no_list_continuous,
-                "video_width": video_width,
-                "video_height": video_height,
-                "fps": fps,
-                "total_frames": total_frames,
-            })
-
+        
         # Final status file update
         with open(status_file, 'w') as f:
             json.dump({"status": "Completed"}, f)
+
+        return (
+            first_entry_dict,
+            distinct_coords,
+            sub_frame_no_list_continuous,
+            video_width,
+            video_height,
+            fps,
+            total_frames
+        )
             
     except Exception as e:
         error_message = f"Error: {e}"
@@ -417,8 +446,8 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
         if task_id in TASK_RESULTS:
             TASK_RESULTS[task_id].update({"status": "Error", "error": str(e)})
         with open(status_file, 'w') as f:
-            json.dump({"status": error_message}, f)
-            
+            json.dump({"status": "Error", "message": error_message}, f)
+        return None
 
 @app.get("/subtitle_intervals/{task_id}", include_in_schema=False)
 async def get_subtitle_intervals(task_id: str):
@@ -566,13 +595,14 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str):
+def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str, detected_areas: dict, universal_box: tuple):
     """
     Background task to perform subtitle extraction and generate SRT and TXT files.
     """
     try:
-        # The new SubtitleExtractor handles everything internally
-        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path)
+        raw_subtitle_path = run_ocr_on_universal_area(video_path, detected_areas, universal_box, status_path)
+        
+        extractor = SubtitleExtractor(video_path=video_path, raw_subtitle_path=raw_subtitle_path)
         generated_srt_path = extractor.generate_subtitle_file()
 
         if generated_srt_path and os.path.exists(generated_srt_path):
@@ -635,7 +665,9 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
         video_path=video_path,
         srt_path=str(srt_path),
         txt_path=str(txt_path),
-        status_path=str(status_path)
+        status_path=str(status_path),
+        detected_areas=result.get("detected_areas", {}), # Pass detected_areas from the main pipeline
+        universal_box=result.get("universal_box") # Pass the universal_box
     )
 
     return {
@@ -690,7 +722,7 @@ async def get_task_info(task_id: str, request: Request):
     
     status = result.get("status")
 
-    if status == "Detecting":
+    if status == "Starting" or status == "Detecting":
         status_file_path = result.get("status_file")
         if status_file_path and os.path.exists(status_file_path):
             try:
@@ -698,19 +730,7 @@ async def get_task_info(task_id: str, request: Request):
                     return json.load(f)
             except (IOError, json.JSONDecodeError):
                 pass # Fallback if file is empty or corrupt
-        return {"status": "Detecting...", "progress": 0}
-
-    elif status == "Completed":
-        return {
-            "status": "Completed",
-            "video_width": result.get("video_width"),
-            "video_height": result.get("video_height"),
-            "original_filename": result.get("original_filename"),
-            "user_id": result.get("user_id"),
-            "fps": result.get("fps"),
-            "total_frames": result.get("total_frames"),
-            "editor_url": str(request.url_for('get_editor', task_id=task_id))
-        }
+        return {"status": "Starting up...", "progress": 0}
 
     elif status == "Generating Subtitles":
         status_file_path = result.get("generation_status_file")
@@ -722,9 +742,9 @@ async def get_task_info(task_id: str, request: Request):
                 pass # Fallback if file is empty or corrupt
         return {"status": "Generating Subtitles...", "progress": 0}
     
-    elif status == "Generation Complete":
+    elif status == "Generation Complete" or status == "Completed":
         return {
-            "status": "Generation Complete",
+            "status": "Generation Complete", # Normalize status
             "download_url": f"/download_subtitle_text/{task_id}",
             "video_width": result.get("video_width"),
             "video_height": result.get("video_height"),
@@ -816,30 +836,63 @@ def process_video(video_path, json_path, output_path, status_file):
                 os.remove(path)
 
 
-@app.get("/status/{status_filename}", include_in_schema=False)
-async def get_status(status_filename: str):
-    status_path = PROCESSED_DIR / status_filename
-    if not status_path.exists():
-        # This is expected before the background task creates the file. Frontend will retry.
-        return JSONResponse(content={"status": "Not Found"}, status_code=404)
+def run_ocr_on_universal_area(video_path: str, detected_areas: dict, universal_box: tuple, status_path: str = None):
+    """
+    Performs OCR on a single universal area across all relevant frames.
+    """
+    cap = cv2.VideoCapture(video_path)
+    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     
-    try:
-        with open(status_path, 'r') as f:
-            content = f.read().strip()
+    text_recogniser = OcrRecogniser()
+    temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
+
+    print("Performing OCR on the universal subtitle region...")
+    sorted_frames = sorted(detected_areas.keys())
+    total_frames_to_ocr = len(sorted_frames)
+    processed_frames = 0
+
+    xmin, xmax, ymin, ymax = universal_box
+    padding = 10
+    crop_xmin = max(0, xmin - padding)
+    crop_ymin = max(0, ymin - padding)
+    crop_xmax = min(frame_width, xmax + padding)
+    crop_ymax = min(frame_height, ymax + padding)
+
+    for frame_no in tqdm(sorted_frames, desc="OCR on Universal Region"):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+
+        cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
+
+        if cropped_frame.size == 0: continue
+
+        dt_box, rec_res = text_recogniser.predict(cropped_frame)
+
+        if rec_res:
+            recognized_coordinates = get_coordinates(dt_box)
+            for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
+                full_frame_coords = (
+                    b_xmin + crop_xmin, b_xmax + crop_xmin,
+                    b_ymin + crop_ymin, b_ymax + crop_ymin
+                )
+                temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
         
-        if not content:
-            # File is empty, meaning processing is just starting.
-            return JSONResponse(content={"status": "Processing..."})
-        
-        # New format: status file contains a JSON object.
-        status_data = json.loads(content)
-        return JSONResponse(content=status_data)
-    except json.JSONDecodeError:
-        # Backwards compatibility for old format where the file was just a string.
-        return JSONResponse(content={"status": content})
-    except Exception as e:
-        return JSONResponse(content={"status": f"Error reading status file: {e}"}, status_code=500)
-        
+        processed_frames += 1
+        if status_path and total_frames_to_ocr > 0:
+            try:
+                percent = int((processed_frames / total_frames_to_ocr) * 100)
+                with open(status_path, 'w') as f:
+                    json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
+            except Exception:
+                pass
+
+    cap.release()
+    temp_raw_subtitle_file.close()
+    return temp_raw_subtitle_file.name
+
 
 @app.get("/download_video/{video_filename}", include_in_schema=False)
 async def download_video(video_filename: str):

@@ -51,8 +51,8 @@
                 .then(data => {
                     const statusText = document.getElementById('status-text');
                     
-                    let progressText = data.progress !== undefined ? `${data.progress}%` : '';
-                    statusText.textContent = `${data.status} ${progressText}`;
+                    let progressText = data.progress !== undefined ? ` ${data.progress}%` : '';
+                    statusText.textContent = `${data.status}${progressText}`;
 
                     if (data.status === "Generation Complete") {
                         window.location.href = data.editor_url;
