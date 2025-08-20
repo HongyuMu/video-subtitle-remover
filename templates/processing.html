@@ -50,12 +50,14 @@
                 .then(response => response.json())
                 .then(data => {
                     const statusText = document.getElementById('status-text');
-                    statusText.textContent = `${data.status} ${data.progress || ''}%`;
                     
-                    if (data.status === "Completed") {
+                    let progressText = data.progress !== undefined ? `${data.progress}%` : '';
+                    statusText.textContent = `${data.status} ${progressText}`;
+
+                    if (data.status === "Generation Complete") {
                         window.location.href = data.editor_url;
                     } else if (data.status.startsWith("Error")) {
-                        statusText.textContent = `Error: ${data.message}`;
+                        statusText.textContent = `Error: ${data.message || data.error}`;
                     } else {
                         setTimeout(pollStatus, 3000); // Poll again after 3 seconds
                     }
