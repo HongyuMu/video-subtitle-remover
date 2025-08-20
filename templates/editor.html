@@ -267,6 +267,7 @@
                 <div class="extra-controls">
                     <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
                 </div>
+                <button id="generate-subtitles-btn">Generate Subtitles</button>
                 <button id="finish-btn">Finish and Process</button>
             </div>
         </div>
@@ -331,6 +332,7 @@
         const splitIntervalBtn = document.getElementById('split-interval-btn');
         const subtitlePlayerContainer = document.querySelector('.subtitle-player-container');
         const subtitlePlayer = document.getElementById('subtitle-player');
+        const generateSubtitlesBtn = document.getElementById('generate-subtitles-btn');
 
         // This is the main function that runs when the page first loads.
         async function initializeEditor() {
@@ -1275,6 +1277,53 @@
                     finishBtn.disabled = false;
                     finishBtn.textContent = "Finish and Process";
                 }
+            }
+        };
+
+        generateSubtitlesBtn.onclick = async () => {
+            generateSubtitlesBtn.disabled = true;
+            generateSubtitlesBtn.textContent = "Generating...";
+
+            try {
+                const response = await fetch(`/generate_subtitle_text/${taskId}`, { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error("Failed to start subtitle generation.");
+                }
+
+                // Now poll for completion
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const infoResponse = await fetch(`/task_info/${taskId}`);
+                        const infoData = await infoResponse.json();
+
+                        if (infoData.status === "Generation Complete") {
+                            clearInterval(pollInterval);
+                            generateSubtitlesBtn.textContent = "Subtitles Generated!";
+                            await loadAndDisplaySubtitles(infoData.download_url);
+                        } else if (infoData.status === "Generation Error") {
+                            clearInterval(pollInterval);
+                            alert(`Error generating subtitles: ${infoData.message}`);
+                            generateSubtitlesBtn.disabled = false;
+                            generateSubtitlesBtn.textContent = "Generate Subtitles";
+                        } else {
+                            // Update status for the user
+                            const progress = infoData.progress || 0;
+                            generateSubtitlesBtn.textContent = `Generating... ${progress}%`;
+                        }
+                    } catch (pollError) {
+                        clearInterval(pollInterval);
+                        console.error("Polling error:", pollError);
+                        alert("An error occurred while checking generation status.");
+                        generateSubtitlesBtn.disabled = false;
+                        generateSubtitlesBtn.textContent = "Generate Subtitles";
+                    }
+                }, 3000);
+
+            } catch (error) {
+                console.error("Error starting generation:", error);
+                alert("Could not start subtitle generation process.");
+                generateSubtitlesBtn.disabled = false;
+                generateSubtitlesBtn.textContent = "Generate Subtitles";
             }
         };
 
