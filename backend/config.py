@@ -30,7 +30,6 @@ STTN_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'sttn', 'infer_model.pth')
 VIDEO_INPAINT_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'video')
 MODEL_VERSION = 'V4'
 # Default language for OCR. Can be changed to 'en', 'japan', 'korean', etc.
-REC_CHAR_TYPE = 'ch'
 DET_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 REC_MODEL_BASE = os.path.join(BASE_DIR, 'models')
 
@@ -66,6 +65,24 @@ if paddle.is_compiled_with_cuda():
     if len(paddle.static.cuda_places()) > 0:
         # 如果有GPU则使用GPU
         USE_GPU = True
+
+# 指定ffmpeg可执行程序路径
+sys_str = platform.system()
+if sys_str == "Windows":
+    ffmpeg_bin = os.path.join('win_x64', 'ffmpeg.exe')
+elif sys_str == "Linux":
+    ffmpeg_bin = os.path.join('linux_x64', 'ffmpeg')
+else:
+    ffmpeg_bin = os.path.join('macos', 'ffmpeg')
+FFMPEG_PATH = os.path.join(BASE_DIR, '', 'ffmpeg', ffmpeg_bin)
+
+if 'ffmpeg.exe' not in os.listdir(os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64')):
+    fs = Filesplit()
+    fs.merge(input_dir=os.path.join(BASE_DIR, '', 'ffmpeg', 'win_x64'))
+# 将ffmpeg添加可执行权限
+os.chmod(FFMPEG_PATH, stat.S_IRWXU + stat.S_IRWXG + stat.S_IRWXO)
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
 # Whether to use ONNX for acceleration on non-Nvidia GPUs (DirectML, AMD, Intel, Apple)
 ONNX_PROVIDERS = []
 if USE_GPU == False:
