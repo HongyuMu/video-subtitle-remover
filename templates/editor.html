@@ -267,6 +267,7 @@
                 <div class="extra-controls">
                     <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
                 </div>
+                <button id="generate-subtitles-btn">Generate Subtitles</button>
                 <button id="finish-btn">Finish and Process</button>
             </div>
         </div>
@@ -331,6 +332,7 @@
         const splitIntervalBtn = document.getElementById('split-interval-btn');
         const subtitlePlayerContainer = document.querySelector('.subtitle-player-container');
         const subtitlePlayer = document.getElementById('subtitle-player');
+        const generateSubtitlesBtn = document.getElementById('generate-subtitles-btn');
 
         // This is the main function that runs when the page first loads.
         async function initializeEditor() {
@@ -1277,6 +1279,149 @@
                 }
             }
         };
+
+        generateSubtitlesBtn.onclick = async () => {
+            generateSubtitlesBtn.disabled = true;
+            generateSubtitlesBtn.textContent = "Generating...";
+
+            try {
+                const response = await fetch(`/generate_subtitle_text/${taskId}`, { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error("Failed to start subtitle generation.");
+                }
+
+                // Now poll for completion
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const infoResponse = await fetch(`/task_info/${taskId}`);
+                        const infoData = await infoResponse.json();
+
+                        if (infoData.status === "Generation Complete") {
+                            clearInterval(pollInterval);
+                            generateSubtitlesBtn.textContent = "Subtitles Generated!";
+                            await loadAndDisplaySubtitles(infoData.download_url);
+                        } else if (infoData.status === "Generation Error") {
+                            clearInterval(pollInterval);
+                            alert(`Error generating subtitles: ${infoData.message}`);
+                            generateSubtitlesBtn.disabled = false;
+                            generateSubtitlesBtn.textContent = "Generate Subtitles";
+                        } else {
+                            // Update status for the user
+                            const progress = infoData.progress || 0;
+                            generateSubtitlesBtn.textContent = `Generating... ${progress}%`;
+                        }
+                    } catch (pollError) {
+                        clearInterval(pollInterval);
+                        console.error("Polling error:", pollError);
+                        alert("An error occurred while checking generation status.");
+                        generateSubtitlesBtn.disabled = false;
+                        generateSubtitlesBtn.textContent = "Generate Subtitles";
+                    }
+                }, 3000);
+
+            } catch (error) {
+                console.error("Error starting generation:", error);
+                alert("Could not start subtitle generation process.");
+                generateSubtitlesBtn.disabled = false;
+                generateSubtitlesBtn.textContent = "Generate Subtitles";
+            }
+        };
+
+        // --- NEW SUBTITLE PLAYER FUNCTIONS ---
+        async function loadAndDisplaySubtitles(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Failed to fetch subtitles: ${response.statusText}`);
+                const subtitleText = await response.text();
+                
+                parsedSubtitles = parseSubtitleFile(subtitleText);
+                populateSubtitlePlayer(parsedSubtitles);
+                subtitlePlayerContainer.style.display = 'flex';
+            } catch (error) {
+                console.error("Could not load subtitles:", error);
+            }
+        }
+
+        function timecodeToSeconds(timecode) {
+            const parts = timecode.split(/[:,]/);
+            if (parts.length !== 4) return 0;
+            const hours = parseInt(parts[0], 10);
+            const minutes = parseInt(parts[1], 10);
+            const seconds = parseInt(parts[2], 10);
+            const milliseconds = parseInt(parts[3], 10);
+            return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+        }
+
+        function secondsToTimecode(totalSeconds) {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = Math.floor(totalSeconds % 60);
+            const milliseconds = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000);
+            
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+        }
+
+        function parseCoords(coordString) {
+            // Example: (Coordinates: (12, 461, 989, 1026))
+            const match = coordString.match(/\((\d+), (\d+), (\d+), (\d+)\)/);
+            if (match) {
+                const [_, xmin, xmax, ymin, ymax] = match.map(Number);
+                return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+            }
+            return null;
+        }
+
+        function parseSubtitleFile(text) {
+            const subs = [];
+            const blocks = text.trim().split(/\n\n+/);
+            for (const block of blocks) {
+                const lines = block.trim().split('\n');
+                if (lines.length < 3) continue;
+
+                const index = parseInt(lines[0], 10);
+                const timeParts = lines[1].split(' --> ');
+                if (timeParts.length !== 2) continue;
+
+                const startTime = timecodeToSeconds(timeParts[0]);
+                const endTime = timecodeToSeconds(timeParts[1]);
+                
+                const coordLineIndex = lines.findIndex(l => l.startsWith('(Coordinates:'));
+                const textLines = lines.slice(2, coordLineIndex !== -1 ? coordLineIndex : lines.length);
+                const textContent = textLines.join('\n');
+                const coords = coordLineIndex !== -1 ? parseCoords(lines[coordLineIndex]) : null;
+
+                subs.push({ index, startTime, endTime, text: textContent, coords });
+            }
+            return subs;
+        }
+        
+        function populateSubtitlePlayer(subtitles) {
+            subtitlePlayer.innerHTML = ''; // Clear existing
+            subtitles.forEach(sub => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'subtitle-line';
+                
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'subtitle-timestamp';
+                timeSpan.textContent = `${secondsToTimecode(sub.startTime)} --> ${secondsToTimecode(sub.endTime)}`;
+                
+                const textSpan = document.createElement('span');
+                textSpan.textContent = sub.text;
+
+                lineDiv.appendChild(timeSpan);
+                lineDiv.appendChild(textSpan);
+
+                lineDiv.onclick = () => onSubtitleClick(sub.startTime);
+                subtitlePlayer.appendChild(lineDiv);
+            });
+        }
+
+        function onSubtitleClick(startTime) {
+            video.currentTime = startTime;
+            if (video.paused) {
+                 // The drawLoop will handle drawing the box
+            }
+        }
 
         // --- START THE APPLICATION ---
         
