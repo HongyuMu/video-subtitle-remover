@@ -211,6 +211,9 @@
                 </div>
             </div>
             <div class="controls">
+                <div class="extra-controls">
+                    <button id="generate-subtitles-btn">Generate Subtitles</button>
+                </div>
                 <div class="timeline-container">
                     <label for="timeline-slider">Timeline:</label>
                     <input type="range" id="timeline-slider" value="0" step="1" min="0" max="1000">
@@ -252,22 +255,23 @@
                     <button id="prev-btn">Previous</button>
                     <button id="next-btn">Next</button>
                 </div>
-                <div class="extra-controls">
-                    <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
+                <div id="main-controls-wrapper">
+                    <div class="extra-controls">
+                        <button id="use-last-btn" style="width: 100%;">Use Previous Box</button>
+                    </div>
+                    <div class="extra-controls">
+                        <button id="not-sub-btn" style="width: 100%;">Not a Subtitle</button>
+                    </div>
+                    <div class="extra-controls">
+                        <button id="split-interval-btn" style="width: 100%;">Split Current Interval</button>
+                    </div>
+                    <div class="extra-controls">
+                        <button id="merge-prev-btn" style="width: 100%;">Merge with Previous</button>
+                    </div>
+                    <div class="extra-controls">
+                        <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
+                    </div>
                 </div>
-                <div class="extra-controls">
-                    <button id="not-sub-btn" style="width: 100%;">Not a Subtitle</button>
-                </div>
-                <div class="extra-controls">
-                    <button id="split-interval-btn" style="width: 100%;">Split Current Interval</button>
-                </div>
-                <div class="extra-controls">
-                    <button id="merge-prev-btn" style="width: 100%;">Merge with Previous</button>
-                </div>
-                <div class="extra-controls">
-                    <button id="reset-btn" style="width: 100%;">Reset Current Box</button>
-                </div>
-                <button id="generate-subtitles-btn">Generate Subtitles</button>
                 <button id="finish-btn">Finish and Process</button>
             </div>
         </div>
@@ -297,6 +301,25 @@
                 values[key].disabled = disabled;
             }
             stepInput.disabled = disabled;
+        }
+
+        function setAllControlsDisabled(disabled) {
+            // Select all buttons and inputs in the controls panel
+            const allControls = document.querySelectorAll('.controls button, .controls input');
+            
+            allControls.forEach(control => {
+                // Don't disable the "Generate Subtitles" button itself
+                if (control.id !== 'generate-subtitles-btn') {
+                    control.disabled = disabled;
+                }
+            });
+
+            // Also handle the main wrapper visibility
+            const controlsWrapper = document.getElementById('main-controls-wrapper');
+            if (controlsWrapper) {
+                controlsWrapper.style.opacity = disabled ? 0.5 : 1;
+                controlsWrapper.style.pointerEvents = disabled ? 'none' : 'auto';
+            }
         }
 
         // Get references to all the HTML elements we will interact with
@@ -349,7 +372,13 @@
                 taskInfo = infoData;
                 
                 if (infoData.status === 'Generation Complete' && infoData.download_url) {
+                    // If subtitles are already generated, enable controls and load them
+                    setAllControlsDisabled(false);
+                    generateSubtitlesBtn.style.display = 'none';
                     loadAndDisplaySubtitles(infoData.download_url);
+                } else {
+                    // Otherwise, disable controls until subtitles are generated
+                    setAllControlsDisabled(true);
                 }
 
                 updateSliderSteps();
@@ -1132,7 +1161,7 @@
             const currentFrame0 = getCurrentFrame();
             
             // The backend's `split_frame` parameter defines the start of the second new interval.
-            // By sending the current frame as 1-based index, we split the interval *at* the current frame.
+            // By sending the current frame, we split the interval *at* the current frame.
             const splitFrame = currentFrame0;
 
             const interval = intervals[currentIntervalIdx];
@@ -1299,6 +1328,9 @@
                         if (infoData.status === "Generation Complete") {
                             clearInterval(pollInterval);
                             generateSubtitlesBtn.textContent = "Subtitles Generated!";
+                            // Hide the generate button and enable all other controls
+                            generateSubtitlesBtn.style.display = 'none';
+                            setAllControlsDisabled(false);
                             await loadAndDisplaySubtitles(infoData.download_url);
                         } else if (infoData.status === "Generation Error") {
                             clearInterval(pollInterval);
