@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Processing Video...</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .processing-container {
+            padding: 40px;
+        }
+        .loader {
+            border: 8px solid #f3f3f3;
+            border-radius: 50%;
+            border-top: 8px solid #4a90e2;
+            width: 60px;
+            height: 60px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="processing-container">
+        <div class="loader"></div>
+        <h1>Processing Your Video</h1>
+        <p>Detecting subtitles... You will be redirected to the editor shortly.</p>
+        <p>Status: <span id="status-text">Starting...</span></p>
+    </div>
+
+    <script>
+        const taskId = "{{ task_id }}";
+
+        function pollStatus() {
+            fetch(`/task_info/${taskId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const statusText = document.getElementById('status-text');
+                    
+                    let progressText = data.progress !== undefined ? `${data.progress}%` : '';
+                    statusText.textContent = `${data.status} ${progressText}`;
+
+                    if (data.status === "Generation Complete") {
+                        window.location.href = data.editor_url;
+                    } else if (data.status.startsWith("Error")) {
+                        statusText.textContent = `Error: ${data.message || data.error}`;
+                    } else {
+                        setTimeout(pollStatus, 3000); // Poll again after 3 seconds
+                    }
+                })
+                .catch(error => {
+                    console.error("Error polling status:", error);
+                    document.getElementById('status-text').textContent = "Error checking status.";
+                });
+        }
+
+        // Start polling immediately
+        pollStatus();
+    </script>
+</body>
+</html>

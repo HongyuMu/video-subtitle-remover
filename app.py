@@ -24,7 +24,7 @@ import queue
 from pydantic import BaseModel, Field
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
-from fastapi import Request
+from fastapi import Request, Form
 from backend.main import find_smallest_bounding_box
 import traceback
 
@@ -33,7 +33,11 @@ templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
 async def root():
-    return {"Message": "Visit docs to remove subtitles in your videos!"}
+    return RedirectResponse(url="/upload")
+
+@app.get("/upload", response_class=HTMLResponse)
+async def upload_page(request: Request):
+    return templates.TemplateResponse("upload.html", {"request": request})
 
 # Use absolute paths to avoid working directory issues
 PROCESSED_DIR = Path(os.getcwd()) / "processed_videos"
@@ -213,6 +217,130 @@ async def find_subtitles(
         "message": "Subtitle detection started.",
         "task_id": task_id
     }
+
+
+@app.post("/upload-and-edit")
+async def upload_and_edit(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    url: Optional[str] = Form(None),
+    cloud_ref: Optional[str] = Form(None)
+):
+    """
+    A user-friendly endpoint that accepts a video from file, URL, or cloud ref,
+    runs the full detection and generation pipeline, and returns a page that 
+    polls for completion and then redirects to the editor.
+    """
+    task_id = str(uuid.uuid4())
+    status_file = PROCESSED_DIR / f"detect_{task_id}.status"
+    
+    # Store initial placeholder
+    TASK_RESULTS[task_id] = {
+        "status": "Starting",
+        "timestamp": time.time(),
+    }
+    
+    # If a file is uploaded, save it to a temp file *before* the request ends,
+    # because the UploadFile object will be closed in the background task.
+    temp_video_path = None
+    if file and file.filename:
+        temp_video_path = save_temp_file(file)
+
+    # This new background task will handle everything: download, detect, and generate
+    background_tasks.add_task(
+        full_pipeline_task,
+        task_id=task_id,
+        status_file=str(status_file),
+        file_path=temp_video_path,
+        url=url,
+        cloud_ref=cloud_ref,
+        original_filename=Path(file.filename).stem if file and file.filename else None
+    )
+
+    return templates.TemplateResponse("processing.html", {
+        "request": request,
+        "task_id": task_id
+    })
+
+
+def full_pipeline_task(
+    task_id: str, 
+    status_file: str, 
+    file_path: Optional[str], 
+    url: Optional[str], 
+    cloud_ref: Optional[str],
+    original_filename: Optional[str]
+):
+    """
+    A new background task that chains detection and generation together.
+    """
+    temp_video_path = None
+    original_name = "unknown_file"
+    try:
+        # --- 1. Handle Video Input ---
+        if file_path:
+            original_name = original_filename
+            temp_video_path = file_path
+        elif url:
+            original_name = Path(url).stem
+            temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+            # Since this is a sync function, we need a sync way to download
+            import requests
+            with requests.get(url, stream=True) as r:
+                r.raise_for_status()
+                with open(temp_video_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+        elif cloud_ref:
+            original_name = Path(cloud_ref).stem
+            temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
+            import requests
+            with requests.get(cloud_ref, stream=True) as r:
+                r.raise_for_status()
+                with open(temp_video_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        f.write(chunk)
+        else:
+            raise ValueError("No video source provided.")
+
+        # Update task with video info now that we have it
+        TASK_RESULTS[task_id].update({
+            "original_filename": original_name,
+            "video_path": temp_video_path,
+        })
+        
+        # --- 2. Run Subtitle Detection ---
+        detect_subtitles_task(task_id, temp_video_path, status_file)
+
+        # --- 3. Run Subtitle Generation ---
+        result = TASK_RESULTS.get(task_id)
+        if result and result.get("status") == "Completed":
+            video_path = result["video_path"]
+            original_stem = result.get("original_filename", "unknown")
+            
+            srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
+            txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
+            status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
+
+            result["status"] = "Generating Subtitles"
+            result["generation_status_file"] = str(status_path)
+
+            generate_subtitle_task(
+                task_id=task_id,
+                video_path=video_path,
+                srt_path=str(srt_path),
+                txt_path=str(txt_path),
+                status_path=str(status_path)
+            )
+
+    except Exception as e:
+        error_message = f"Error in full pipeline: {e}"
+        print(error_message)
+        if task_id in TASK_RESULTS:
+            TASK_RESULTS[task_id].update({"status": "Error", "error": str(e)})
+        with open(status_file, 'w') as f:
+            json.dump({"status": "Error", "message": error_message}, f)
 
 
 def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):

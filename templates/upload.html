@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Video for Subtitle Editing</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .upload-container {
+            background-color: #fff;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+            text-align: center;
+            width: 100%;
+            max-width: 600px;
+        }
+        h1 {
+            color: #4a90e2;
+        }
+        form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-top: 20px;
+        }
+        input[type="file"], input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            box-sizing: border-box; /* Important for padding */
+        }
+        button {
+            margin-top: 10px;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            background-color: #4a90e2;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        button:hover {
+            background-color: #357abd;
+        }
+    </style>
+</head>
+<body>
+    <div class="upload-container">
+        <h1>Subtitle Editor</h1>
+        <p>Upload a video to start detecting and editing subtitles.</p>
+        <form action="/upload-and-edit" method="post" enctype="multipart/form-data">
+            <div>
+                <label for="file">Upload a local video file:</label>
+                <input type="file" name="file" id="file" accept="video/*">
+            </div>
+            <div>
+                <label for="url">Or provide a video URL:</label>
+                <input type="text" name="url" id="url" placeholder="http://example.com/video.mp4">
+            </div>
+            <div>
+                <label for="cloud_ref">Or a cloud reference:</label>
+                <input type="text" name="cloud_ref" id="cloud_ref" placeholder="Cloud storage link...">
+            </div>
+            <p style="font-size: 0.8em; color: #666;">Please provide only one source.</p>
+            <button type="submit">Upload and Start</button>
+        </form>
+    </div>
+</body>
+</html>
