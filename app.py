@@ -367,9 +367,11 @@ async def get_subtitle_intervals(task_id: str):
     
     # Getting the intervals and their current rectangles in base 0
     for idx, (coords, frame_range) in enumerate(zip(distinct_coords, frame_intervals)):
+        # Per editor requirements, convert 1-based frame ranges from backend detection
+        # to 0-based for the frontend video player.
         intervals.append({
             "interval_idx": idx,
-            "frame_range": frame_range,
+            "frame_range": (frame_range[0] - 1, frame_range[1] - 1),
             "coords": coords,
         })
     return {"intervals": intervals}
@@ -870,7 +872,7 @@ async def adjust_interval(task_id: str, req: AdjustIntervalRequest):
         "new_intervals": [
             {
                 "interval_idx": i,
-                "frame_range": interval,
+                "frame_range": (interval[0] - 1, interval[1] - 1),
                 "coords": coords
             }
             for i, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
@@ -924,7 +926,7 @@ async def merge_with_previous(task_id: str, req: MergeWithPreviousRequest):
         "new_intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": interval,
+                "frame_range": (interval[0] - 1, interval[1] - 1),
                 "coords": coords
             }
             for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
@@ -977,7 +979,7 @@ async def split_interval(task_id: str, req: SplitIntervalRequest):
         "new_intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": interval,
+                "frame_range": (interval[0] - 1, interval[1] - 1),
                 "coords": coords
             }
             for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
@@ -1094,7 +1096,7 @@ async def merge_similar_intervals(task_id: str):
         "intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": interval,
+                "frame_range": (interval[0] - 1, interval[1] - 1),
                 "coords": coords
             }
             for idx, (interval, coords) in enumerate(zip(new_intervals, new_distinct_coords))
