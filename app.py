@@ -331,9 +331,14 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
         if task_id in TASK_RESULTS:
             TASK_RESULTS[task_id].update({
                 "status": "Completed",
-                "distinct_coords": distinct_coords,
-                "frame_intervals": sub_frame_no_list_continuous,
-                "detected_areas": first_entry_dict,
+                "intervals": [
+                    {
+                        "frame_range": (start, end),
+                        "coords": coord,
+                        "text": "" # Text will be added by the editor
+                    }
+                    for start, end, coord in zip(sub_frame_no_list_continuous, sub_frame_no_list_continuous, distinct_coords)
+                ],
                 "video_width": video_width,
                 "video_height": video_height,
                 "fps": fps,
@@ -362,32 +367,32 @@ async def get_subtitle_intervals(task_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     intervals = []
-    distinct_coords = result.get("distinct_coords", [])
-    frame_intervals = result.get("frame_intervals", [])
-    
-    # Getting the intervals and their current rectangles in base 0
-    for idx, (coords, frame_range) in enumerate(zip(distinct_coords, frame_intervals)):
+    for idx, (coord, frame_range) in enumerate(zip(result.get("intervals", []), result.get("intervals", []))):
         # Per editor requirements, convert 1-based frame ranges from backend detection
         # to 0-based for the frontend video player.
         intervals.append({
             "interval_idx": idx,
-            "frame_range": (frame_range[0] - 1, frame_range[1] - 1),
-            "coords": coords,
+            "frame_range": (frame_range['frame_range'][0] - 1, frame_range['frame_range'][1] - 1),
+            "coords": coord['coords'],
+            "text": coord.get('text', '')
         })
     return {"intervals": intervals}
 
 
 # Draw subtitle boxes on the video for users to visualize and adjust later
-def draw_subtitle_boxes(frame, distinct_coords, frame_intervals, current_frame_idx):
+def draw_subtitle_boxes(frame, intervals, current_frame_idx):
     """
     Draws rectangles for all subtitle regions active at the current frame.
     Expands the box by 10 pixels to ensure full coverage.
     """
     frame_height, frame_width, _ = frame.shape
-    for coord, (start, end) in zip(distinct_coords, frame_intervals):
+    for interval in intervals:
+        coord = interval['coords']
+        start, end = interval['frame_range']
         if coord is None:
             continue
-        if start <= current_frame_idx <= end:
+        # Frame ranges are 1-based, current_frame_idx is 0-based
+        if start <= (current_frame_idx + 1) <= end:
             xmin, xmax, ymin, ymax = coord
             
             # Expand by 10 pixels in each direction, clamping to video dimensions
@@ -418,8 +423,7 @@ async def show_subtitle_box(
     video_path = result.get("video_path")
     if not video_path or not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video not found")
-    distinct_coords = result["distinct_coords"]
-    frame_intervals = result["frame_intervals"]
+    intervals = result.get("intervals", [])
 
     # Check memory before loading video
     if not check_memory_usage():
@@ -439,7 +443,7 @@ async def show_subtitle_box(
 
     # Draw the boxes only if requested by the client
     if draw_box:
-        frame_with_boxes = draw_subtitle_boxes(frame, distinct_coords, frame_intervals, frame_idx)
+        frame_with_boxes = draw_subtitle_boxes(frame, intervals, frame_idx)
     else:
         frame_with_boxes = frame
 
@@ -469,12 +473,12 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     if not video_width or not video_height:
         raise HTTPException(status_code=400, detail="Video dimensions not found for this task.")
 
-    distinct_coords = result.get("distinct_coords", [])
-    if not (0 <= req.interval_idx < len(distinct_coords)):
+    intervals = result.get("intervals", [])
+    if not (0 <= req.interval_idx < len(intervals)):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
     # Get current box properties
-    xmin, xmax, ymin, ymax = distinct_coords[req.interval_idx]
+    xmin, xmax, ymin, ymax = intervals[req.interval_idx]['coords']
     current_x, current_y = xmin, ymin
     current_width, current_height = xmax - xmin, ymax - ymin
 
@@ -492,8 +496,8 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
 
     # Update coordinates
     new_coords = (new_x, new_x + new_width, new_y, new_y + new_height)
-    distinct_coords[req.interval_idx] = new_coords
-    TASK_RESULTS[task_id]["distinct_coords"] = distinct_coords
+    intervals[req.interval_idx]['coords'] = new_coords
+    TASK_RESULTS[task_id]["intervals"] = intervals
 
     return {
         "message": f"Interval {req.interval_idx} adjusted successfully.",
@@ -694,8 +698,7 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
     temp_json_path = f"/tmp/{uuid.uuid4()}.json"
     with open(temp_json_path, "w") as f:
         json.dump({
-            "distinct_coordinates": result.get("distinct_coords"),
-            "frame_intervals": result.get("frame_intervals")
+            "intervals": result.get("intervals")
         }, f, indent=4)
 
     processed_video_path = PROCESSED_DIR / f"processed_{original_stem}.mp4"
@@ -726,8 +729,12 @@ def process_video(video_path, json_path, output_path, status_file):
 
         with open(json_path, 'r') as f:
             json_data = json.load(f)
-        coords = json_data.get("distinct_coordinates")
-        intervals = json_data.get("frame_intervals")
+        
+        intervals_data = json_data.get("intervals")
+        # Unpack the structure for the SubtitleRemover class
+        coords = [item['coords'] for item in intervals_data]
+        intervals = [item['frame_range'] for item in intervals_data]
+        
         sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
         # Let the remover write incremental progress into the same status file
         try:
@@ -832,10 +839,9 @@ async def adjust_interval(task_id: str, req: AdjustIntervalRequest):
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    frame_intervals = result.get("frame_intervals", [])
-    distinct_coords = result.get("distinct_coords", [])
+    intervals = result.get("intervals", [])
 
-    if not (0 <= req.interval_idx < len(frame_intervals)):
+    if not (0 <= req.interval_idx < len(intervals)):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
     idx = req.interval_idx
@@ -848,34 +854,35 @@ async def adjust_interval(task_id: str, req: AdjustIntervalRequest):
 
     # Adjust previous interval, if it exists
     if idx > 0:
-        prev_start, _ = frame_intervals[idx - 1]
+        prev_start, _ = intervals[idx - 1]['frame_range']
         new_prev_end = new_start - 1
         if new_prev_end < prev_start:
             raise HTTPException(status_code=400, detail=f"Change invalid: start frame collides with previous interval.")
-        frame_intervals[idx - 1] = (prev_start, new_prev_end)
+        intervals[idx - 1]['frame_range'] = (prev_start, new_prev_end)
         
     # Adjust next interval, if it exists
-    if idx < len(frame_intervals) - 1:
-        _, next_end = frame_intervals[idx + 1]
+    if idx < len(intervals) - 1:
+        _, next_end = intervals[idx + 1]['frame_range']
         new_next_start = new_end + 1
         if new_next_start > next_end:
             raise HTTPException(status_code=400, detail=f"Change invalid: end frame collides with next interval.")
-        frame_intervals[idx + 1] = (new_next_start, next_end)
+        intervals[idx + 1]['frame_range'] = (new_next_start, next_end)
 
     # Finally, update the current interval
-    frame_intervals[idx] = (new_start, new_end)
+    intervals[idx]['frame_range'] = (new_start, new_end)
     
-    TASK_RESULTS[task_id]["frame_intervals"] = frame_intervals
+    TASK_RESULTS[task_id]["intervals"] = intervals
 
     return {
         "message": f"Interval {idx + 1} and its neighbors were adjusted successfully.",
         "new_intervals": [
             {
                 "interval_idx": i,
-                "frame_range": (interval[0] - 1, interval[1] - 1),
-                "coords": coords
+                "frame_range": (interval['frame_range'][0] - 1, interval['frame_range'][1] - 1),
+                "coords": interval['coords'],
+                "text": interval.get('text', '')
             }
-            for i, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+            for i, (interval) in enumerate(intervals)
         ]
     }
 
@@ -890,46 +897,47 @@ async def merge_with_previous(task_id: str, req: MergeWithPreviousRequest):
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    frame_intervals = result.get("frame_intervals", [])
-    distinct_coords = result.get("distinct_coords", [])
+    intervals = result.get("intervals", [])
     
-    if req.interval_idx <= 0 or req.interval_idx >= len(frame_intervals):
+    if req.interval_idx <= 0 or req.interval_idx >= len(intervals):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
-    # Merge the current interval with the previous one
-    prev_start, prev_end = frame_intervals[req.interval_idx - 1]
-    curr_start, curr_end = frame_intervals[req.interval_idx]
-    
-    # Create new merged interval
-    merged_start = prev_start
-    merged_end = curr_end
+    # Get the intervals to merge
+    prev_interval = intervals[req.interval_idx - 1]
+    curr_interval = intervals[req.interval_idx]
+
+    # Create new merged interval by extending the end of the previous one
+    prev_start, _ = prev_interval['frame_range']
+    _, curr_end = curr_interval['frame_range']
+    merged_range = (prev_start, curr_end)
     
     # Use the bounding box that covers both intervals
-    prev_coords = distinct_coords[req.interval_idx - 1]
-    curr_coords = distinct_coords[req.interval_idx]
-    merged_coords = find_smallest_bounding_box([prev_coords, curr_coords])
+    merged_coords = find_smallest_bounding_box([prev_interval['coords'], curr_interval['coords']])
     
+    # Merge text content
+    merged_text = f"{prev_interval.get('text', '')} {curr_interval.get('text', '')}".strip()
+
     # Update the previous interval with merged data
-    frame_intervals[req.interval_idx - 1] = (merged_start, merged_end)
-    distinct_coords[req.interval_idx - 1] = merged_coords
+    intervals[req.interval_idx - 1]['frame_range'] = merged_range
+    intervals[req.interval_idx - 1]['coords'] = merged_coords
+    intervals[req.interval_idx - 1]['text'] = merged_text
     
-    # Remove the current interval
-    frame_intervals.pop(req.interval_idx)
-    distinct_coords.pop(req.interval_idx)
+    # Remove the current interval that was merged
+    intervals.pop(req.interval_idx)
     
     # Update task results
-    result["frame_intervals"] = frame_intervals
-    result["distinct_coords"] = distinct_coords
+    result["intervals"] = intervals
     
     return {
-        "message": f"Interval {req.interval_idx} merged with previous interval.",
+        "message": f"Interval {req.interval_idx + 1} merged with previous interval.",
         "new_intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": (interval[0] - 1, interval[1] - 1),
-                "coords": coords
+                "frame_range": (interval['frame_range'][0] - 1, interval['frame_range'][1] - 1),
+                "coords": interval['coords'],
+                "text": interval.get('text', '')
             }
-            for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+            for idx, interval in enumerate(intervals)
         ]
     }
 
@@ -945,67 +953,74 @@ async def split_interval(task_id: str, req: SplitIntervalRequest):
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    frame_intervals = result.get("frame_intervals", [])
-    distinct_coords = result.get("distinct_coords", [])
+    intervals = result.get("intervals", [])
     
-    if not (0 <= req.interval_idx < len(frame_intervals)):
+    if not (0 <= req.interval_idx < len(intervals)):
         raise HTTPException(status_code=400, detail="Invalid interval_idx")
 
-    start_frame, end_frame = frame_intervals[req.interval_idx]
+    # The split_frame from the frontend is 0-based, but our intervals are 1-based.
+    # No conversion is needed for the check, but +1 is needed for the new start.
+    start_frame, end_frame = intervals[req.interval_idx]['frame_range']
     
-    if not (start_frame < req.split_frame < end_frame):
-        raise HTTPException(status_code=400, detail="Split frame must be within the interval")
+    if not (start_frame <= req.split_frame < end_frame):
+        raise HTTPException(status_code=400, detail="Split frame must be within the interval (but not the last frame)")
 
-    # Create two new intervals: put the split frame into the second part
-    first_interval = (start_frame, req.split_frame - 1)
-    second_interval = (req.split_frame, end_frame)
+    # Create two new intervals.
+    # Frontend sends 0-based frame to split AT. So, 1st part ends at split_frame. 2nd part starts at split_frame + 1.
+    # Backend intervals are 1-based. So, 1st part is [start, split_frame]. 2nd is [split_frame+1, end]
+    first_interval_range = (start_frame, req.split_frame)
+    second_interval_range = (req.split_frame + 1, end_frame)
     
-    # Use the same coordinates for both parts (user can adjust later)
-    coords = distinct_coords[req.interval_idx]
+    # Use the same coordinates and text for both parts (user can adjust later)
+    original_interval = intervals[req.interval_idx]
+    coords = original_interval['coords']
+    text = original_interval.get('text', '') # Keep original text for both
     
     # Replace the current interval with the first part
-    frame_intervals[req.interval_idx] = first_interval
+    intervals[req.interval_idx]['frame_range'] = first_interval_range
     
+    # Create a new interval object for the second part
+    new_interval_obj = {
+        "frame_range": second_interval_range,
+        "coords": coords,
+        "text": text
+    }
     # Insert the second part after the current interval
-    frame_intervals.insert(req.interval_idx + 1, second_interval)
-    distinct_coords.insert(req.interval_idx + 1, coords)
+    intervals.insert(req.interval_idx + 1, new_interval_obj)
     
     # Update task results
-    result["frame_intervals"] = frame_intervals
-    result["distinct_coords"] = distinct_coords
+    result["intervals"] = intervals
     
     return {
-        "message": f"Interval {req.interval_idx} split at frame {req.split_frame}.",
+        "message": f"Interval split at frame {req.split_frame}.",
         "new_intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": (interval[0] - 1, interval[1] - 1),
-                "coords": coords
+                "frame_range": (interval['frame_range'][0] - 1, interval['frame_range'][1] - 1),
+                "coords": interval['coords'],
+                "text": interval.get('text', '')
             }
-            for idx, (interval, coords) in enumerate(zip(frame_intervals, distinct_coords))
+            for idx, interval in enumerate(intervals)
         ]
     }
 
 
 
 
-def merge_intervals(intervals, distinct_coords):
+def merge_intervals(intervals):
     """
     Merge intervals that have similar coordinates.
-    Returns new intervals and distinct_coords with merged similar regions.
+    Returns new intervals list with merged similar regions.
     Uses config.PIXEL_TOLERANCE_X and config.PIXEL_TOLERANCE_Y for similarity comparison.
     """
-    if not intervals or not distinct_coords:
-        return intervals, distinct_coords
-    
-    # Create a mapping of intervals to their coordinates
-    interval_coords = list(zip(intervals, distinct_coords))
+    if not intervals:
+        return intervals
     
     # Group similar intervals
     merged_groups = []
     used_indices = set()
     
-    for i, (interval1, coords1) in enumerate(interval_coords):
+    for i, interval1 in enumerate(intervals):
         if i in used_indices:
             continue
             
@@ -1013,43 +1028,45 @@ def merge_intervals(intervals, distinct_coords):
         current_group_indices = [i]
         
         # Find all similar intervals
-        for j, (interval2, coords2) in enumerate(interval_coords[i+1:], i+1):
+        for j, interval2 in enumerate(intervals[i+1:], i+1):
             if j in used_indices:
                 continue
                 
-            if SubtitleDetect.are_similar(coords1, coords2):
+            if SubtitleDetect.are_similar(interval1['coords'], interval2['coords']):
                 current_group_indices.append(j)
         
         # Merge the group
         if len(current_group_indices) > 1:
-            # Sort by start frame
-            current_group = [interval_coords[k] for k in current_group_indices]
-            current_group.sort(key=lambda x: x[0][0])
+            current_group = [intervals[k] for k in current_group_indices]
+            current_group.sort(key=lambda x: x['frame_range'][0])
             
             # Merge intervals
-            merged_start = current_group[0][0][0]
-            merged_end = current_group[-1][0][1]
-            merged_interval = (merged_start, merged_end)
+            merged_start = current_group[0]['frame_range'][0]
+            merged_end = current_group[-1]['frame_range'][1]
+            merged_range = (merged_start, merged_end)
             
             # Use the bounding box that covers all merged coordinates
-            all_coords = [item[1] for item in current_group]
+            all_coords = [item['coords'] for item in current_group]
             merged_coords = find_smallest_bounding_box(all_coords)
+
+            # Combine text from all merged intervals
+            merged_text = " ".join(item.get('text', '') for item in current_group).strip()
             
-            merged_groups.append((merged_interval, merged_coords))
+            merged_groups.append({
+                "frame_range": merged_range,
+                "coords": merged_coords,
+                "text": merged_text
+            })
             used_indices.update(current_group_indices)
         else:
             # Single interval, keep as is
-            merged_groups.append((interval1, coords1))
+            merged_groups.append(interval1)
             used_indices.add(i)
     
     # Sort by start frame
-    merged_groups.sort(key=lambda x: x[0][0])
+    merged_groups.sort(key=lambda x: x['frame_range'][0])
     
-    # Unpack results
-    new_intervals = [group[0] for group in merged_groups]
-    new_distinct_coords = [group[1] for group in merged_groups]
-    
-    return new_intervals, new_distinct_coords
+    return merged_groups
 
 @app.post("/merge_similar_intervals/{task_id}", include_in_schema=False)
 async def merge_similar_intervals(task_id: str):
@@ -1061,45 +1078,39 @@ async def merge_similar_intervals(task_id: str):
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    distinct_coords = result.get("distinct_coords", [])
-    frame_intervals = result.get("frame_intervals", [])
+    intervals = result.get("intervals", [])
     
-    if not distinct_coords or not frame_intervals:
+    if not intervals:
         raise HTTPException(status_code=400, detail="No intervals to merge")
     
+    original_count = len(intervals)
     # Merge similar intervals
-    new_intervals, new_distinct_coords = merge_intervals(
-        frame_intervals, 
-        distinct_coords
-    )
+    new_intervals = merge_intervals(intervals)
     
     # Update the task results
-    result["frame_intervals"] = new_intervals
-    result["distinct_coords"] = new_distinct_coords
+    result["intervals"] = new_intervals
     
     # Update the JSON file if it exists
     original_name = result.get("original_filename", "unknown")
     json_file_path = PROCESSED_FILES_DIR / f"{original_name}_sub.json"
     
     if json_file_path.exists():
-        json_content = {
-            "distinct_coordinates": new_distinct_coords,
-            "frame_intervals": new_intervals
-        }
+        json_content = { "intervals": new_intervals }
         with open(json_file_path, "w") as json_file:
             json.dump(json_content, json_file, indent=4)
     
     return {
-        "message": f"Merged {len(frame_intervals)} intervals into {len(new_intervals)} intervals",
-        "original_count": len(frame_intervals),
+        "message": f"Merged {original_count} intervals into {len(new_intervals)} intervals",
+        "original_count": original_count,
         "merged_count": len(new_intervals),
-        "intervals": [
+        "new_intervals": [
             {
                 "interval_idx": idx,
-                "frame_range": (interval[0] - 1, interval[1] - 1),
-                "coords": coords
+                "frame_range": (interval['frame_range'][0] - 1, interval['frame_range'][1] - 1),
+                "coords": interval['coords'],
+                "text": interval.get('text', '')
             }
-            for idx, (interval, coords) in enumerate(zip(new_intervals, new_distinct_coords))
+            for idx, interval in enumerate(new_intervals)
         ]
     }
 
