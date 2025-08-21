@@ -256,6 +256,8 @@ MODE = InpaintMode.STTN
 REC_BATCH_NUM = 6
 # How many images are recognized in each batch of the DB algorithm, the default is 10
 MAX_BATCH_SIZE = 10
+# Confidence threshold for text detection. Lower values are less strict.
+DET_DB_BOX_THRESH = 0.6
 # Do not accept subtitles with a confidence level lower than 0.75
 DROP_SCORE = 0.75
 # Allowed deviation of the subtitle area, 0 means no out-of-bounds allowed, 0.03 means 3% out-of-bounds is allowed
