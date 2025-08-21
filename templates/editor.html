@@ -457,15 +457,15 @@
 
             if (!fromTimeline) {
                 const boundary = goToEnd ? interval.frame_range[1] : interval.frame_range[0];
-                setTimelinePosition(boundary); // Frame ranges are 0-based, no conversion needed
-                // Keep the displayed inputs consistent with interval values
-                startFrameInput.value = interval.frame_range[0];
-                endFrameInput.value = interval.frame_range[1];
+                setTimelinePosition(boundary); // Frame ranges are now 0-based
+                // Display as 1-based
+                startFrameInput.value = interval.frame_range[0] + 1;
+                endFrameInput.value = interval.frame_range[1] + 1;
             }
 
-            intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0]}-${interval.frame_range[1]})`;
-            startFrameInput.value = interval.frame_range[0];
-            endFrameInput.value = interval.frame_range[1];
+            intervalInfo.textContent = `Editing Interval ${idx + 1} / ${intervals.length} (Frames ${interval.frame_range[0] + 1}-${interval.frame_range[1] + 1})`;
+            startFrameInput.value = interval.frame_range[0] + 1;
+            endFrameInput.value = interval.frame_range[1] + 1;
             
             const [xmin, xmax, ymin, ymax] = interval.coords;
             const currentBox = {
@@ -808,21 +808,26 @@
 
         async function saveInterval() {
             const startFrame = parseInt(startFrameInput.value);
-            const endFrame = Math.min(parseInt(endFrameInput.value), parseInt(timeline.max));
-            intervals[currentIntervalIdx].frame_range = [startFrame, endFrame];
+            const endFrame = Math.min(parseInt(endFrameInput.value), parseInt(timeline.max) + 1);
+            
+            // Convert back to 0-based for local state and 1-based for API
+            const internalStart = startFrame - 1;
+            const internalEnd = endFrame - 1;
+            intervals[currentIntervalIdx].frame_range = [internalStart, internalEnd];
+
             try {
                 const response = await fetch(`/adjust_interval/${taskId}`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         interval_idx: currentIntervalIdx, 
-                        start_frame: startFrame,
-                        end_frame: endFrame
+                        start_frame: startFrame, // Send 1-based
+                        end_frame: endFrame     // Send 1-based
                     })
                 });
                 const data = await response.json();
                 if (response.ok) {
-                    // The backend now returns the full updated list of intervals
+                    // The backend now returns the full updated list of intervals (0-based)
                     intervals = data.new_intervals;
                     originalIntervals = JSON.parse(JSON.stringify(data.new_intervals));
                     alert(data.message); // Show the more informative message from the server
@@ -1449,7 +1454,10 @@
         }
 
         function onSubtitleClick(startTime) {
-            video.currentTime = startTime;
+            // Add a small epsilon to avoid floating point issues where the time might be
+            // slightly less than the intended frame's start time, causing it to round down.
+            const epsilon = 1 / (taskInfo.fps * 2);
+            video.currentTime = startTime + epsilon;
             if (video.paused) {
                  // The drawLoop will handle drawing the box
             }

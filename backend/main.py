@@ -1365,26 +1365,20 @@ class SubtitleExtractor:
 
     def _frame_to_timecode(self, frame_no):
         """
-        Converts a frame number to an SRT timecode.
+        Converts a 1-based frame number to an SRT timecode.
         """
-        cap = cv2.VideoCapture(self.video_path)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-        ret, _ = cap.read()
-        milliseconds = cap.get(cv2.CAP_PROP_POS_MSEC) if ret else 0
-        cap.release()
+        # Frame numbers are 1-based, video frames are 0-based.
+        frame_idx_0_based = max(0, frame_no - 1)
 
-        if milliseconds <= 0:
-            seconds = frame_no / self.fps
-            milliseconds = (seconds - int(seconds)) * 1000
-            seconds = int(seconds)
-        else:
-            seconds = milliseconds // 1000
-            milliseconds = int(milliseconds % 1000)
+        # Calculate time in seconds directly from frame number and FPS for precision.
+        total_seconds = frame_idx_0_based / self.fps
 
-        minutes = int(seconds // 60)
-        seconds = int(seconds % 60)
-        hours = int(minutes // 60)
-        minutes = int(minutes % 60)
+        # Decompose into hours, minutes, seconds, milliseconds
+        milliseconds = int((total_seconds * 1000) % 1000)
+        
+        hours = int(total_seconds // 3600)
+        minutes = int((total_seconds % 3600) // 60)
+        seconds = int(total_seconds % 60)
 
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{milliseconds:03d}"
 

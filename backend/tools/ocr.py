@@ -57,7 +57,7 @@ class OcrRecogniser:
             use_onnx_runtime = False
 
         return PaddleOCR(use_gpu=config.USE_GPU,
-                         gpu_mem=500,
+                         gpu_mem=gpu_mem,
                          det_algorithm='DB',
                          # 设置文本检测模型路径
                          det_model_dir=self.convertToOnnxModelIfNeeded(config.DET_MODEL_PATH),
