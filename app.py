@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse
 from fastapi import Request, Form
 from backend.main import find_smallest_bounding_box
 import traceback
+from fastapi.responses import Response
 
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
@@ -339,6 +340,7 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
                     }
                     for frame_range, coord in zip(sub_frame_no_list_continuous, distinct_coords)
                 ],
+                "detected_areas": first_entry_dict, # Keep this for subtitle generation
                 "video_width": video_width,
                 "video_height": video_height,
                 "fps": fps,
@@ -508,45 +510,60 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str, detected_areas: dict):
+def generate_subtitle_task(task_id: str, status_path: str):
     """
-    Background task to perform subtitle extraction and generate SRT and TXT files.
+    Background task to perform subtitle extraction and merge text into existing intervals.
     """
     try:
-        # The new SubtitleExtractor handles everything internally
+        result = TASK_RESULTS[task_id]
+        video_path = result['video_path']
+        detected_areas = result.get('detected_areas', {})
+
+        # The SubtitleExtractor handles OCR internally
         extractor = SubtitleExtractor(video_path=video_path, status_path=status_path, detected_areas=detected_areas)
-        generated_srt_path = extractor.generate_subtitle_file()
+        
+        # This method returns a list of (start_frame, end_frame, coords, text)
+        generated_subs = extractor._remove_duplicate_subtitle()
 
-        if generated_srt_path and os.path.exists(generated_srt_path):
-            # Generate TXT from SRT
-            extractor.srt2txt(generated_srt_path)
+        user_intervals = result.get('intervals', [])
+
+        # Match generated text to user intervals based on frame range overlap (IoU)
+        for sub_start, sub_end, _, sub_text in generated_subs:
+            best_match_idx = -1
+            highest_iou = 0.5  # Require at least 50% overlap
+
+            for i, user_interval in enumerate(user_intervals):
+                user_range = user_interval['frame_range']
+                iou = get_frame_range_iou((int(sub_start), int(sub_end)), user_range)
+                
+                if iou > highest_iou:
+                    highest_iou = iou
+                    best_match_idx = i
             
-            # Move final txt file to its destination
-            final_txt_path = os.path.join(os.path.dirname(generated_srt_path), Path(generated_srt_path).stem + '.txt')
-            shutil.move(final_txt_path, txt_path)
+            if best_match_idx != -1:
+                # Append text. If multiple subs match, they get concatenated.
+                existing_text = user_intervals[best_match_idx].get('text', '')
+                user_intervals[best_match_idx]['text'] = f"{existing_text} {sub_text}".strip()
 
-            # Final status update
-            TASK_RESULTS[task_id]['status'] = 'Generation Complete'
-            TASK_RESULTS[task_id]['txt_path'] = txt_path
-            with open(status_path, 'w') as f:
-                json.dump({"status": "Generation Complete", "download_url": f"/download_subtitle_text/{task_id}"}, f)
-        else:
-            raise Exception("Subtitle file could not be generated.")
+        # Final status update
+        result['status'] = 'Generation Complete'
+        # The download URL now points to a file with the combined text content.
+        result['download_url'] = f"/download_subtitle_text/{task_id}"
+        with open(status_path, 'w') as f:
+            json.dump({"status": "Generation Complete", "download_url": result['download_url']}, f)
 
     except Exception as e:
+        traceback.print_exc()
         if task_id in TASK_RESULTS:
             TASK_RESULTS[task_id]['status'] = 'Generation Error'
             TASK_RESULTS[task_id]['error'] = traceback.format_exc()
         with open(status_path, 'w') as f:
             json.dump({"status": "Error", "message": str(e)}, f)
     finally:
-        # Clean up temporary raw subtitle file if created
+        # Clean up temporary raw subtitle file if created by extractor
         if 'extractor' in locals() and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
             if os.path.exists(extractor.raw_subtitle_path) and "tmp" in extractor.raw_subtitle_path:
                 os.remove(extractor.raw_subtitle_path)
-        if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
-            os.remove(generated_srt_path)
-
 
 @app.post("/generate_subtitle_text/{task_id}")
 async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
@@ -558,33 +575,58 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
     if not result or not result.get("video_path"):
         raise HTTPException(status_code=404, detail="Video for this task not found.")
 
-    video_path = result["video_path"]
     original_stem = result.get("original_filename", "unknown")
-    
-    # Define paths for the final SRT and TXT files
-    srt_path = PROCESSED_FILES_DIR / f"{original_stem}.srt"
-    txt_path = PROCESSED_FILES_DIR / f"{original_stem}.txt"
     status_path = PROCESSED_FILES_DIR / f"{original_stem}_generation.status"
 
     # Update task status to generating
     result["status"] = "Generating Subtitles"
     result["generation_status_file"] = str(status_path)
 
-    # Run the entire OCR and text generation process in the background
     background_tasks.add_task(
         generate_subtitle_task,
         task_id=task_id,
-        video_path=video_path,
-        srt_path=str(srt_path),
-        txt_path=str(txt_path),
         status_path=str(status_path),
-        detected_areas=result.get("detected_areas", {})
     )
 
     return {
         "message": "Subtitle generation started. Poll /task_info/{task_id} for progress.",
         "task_id": task_id
     }
+
+
+@app.get("/download_subtitle_text/{task_id}")
+async def download_subtitle_text(task_id: str):
+    """
+    Downloads the generated subtitle text file for a given task.
+    This now compiles the text from the final interval data.
+    """
+    result = TASK_RESULTS.get(task_id)
+    if not result or result.get("status") != "Generation Complete":
+        raise HTTPException(status_code=404, detail="Subtitle text file not ready or task not found.")
+
+    intervals = result.get("intervals", [])
+    
+    # Create the text content on-the-fly from the interval data
+    srt_content = ""
+    for i, interval in enumerate(intervals):
+        if interval.get("text"):
+            start_frame = interval['frame_range'][0]
+            end_frame = interval['frame_range'][1]
+            
+            # This is a placeholder for time conversion; a real implementation would need fps.
+            start_time = f"00:00:{start_frame//30:02d},{ (start_frame%30)*33:03d}"
+            end_time = f"00:00:{end_frame//30:02d},{ (end_frame%30)*33:03d}"
+
+            srt_content += f"{i+1}\n"
+            srt_content += f"{start_time} --> {end_time}\n"
+            srt_content += f"{interval['text']}\n\n"
+
+    original_stem = result.get("original_filename", "unknown")
+    return Response(
+        content=srt_content,
+        media_type='text/plain',
+        headers={"Content-Disposition": f"attachment; filename={original_stem}_subtitles.txt"}
+    )
 
 
 @app.get("/editor/{task_id}", response_class=HTMLResponse, include_in_schema=False)
@@ -795,36 +837,21 @@ async def download_video(video_filename: str):
     return FileResponse(video_path, media_type="video/mp4", filename=video_filename)
 
 
-@app.get("/download_subtitle_text/{task_id}")
-async def download_subtitle_text(task_id: str):
-    """
-    Downloads the generated subtitle text file for a given task.
-    """
-    result = TASK_RESULTS.get(task_id)
-    if not result or result.get("status") != "Generation Complete":
-        raise HTTPException(status_code=404, detail="Subtitle text file not ready or task not found.")
-
-    txt_path = result.get("txt_path")
-    if not txt_path or not os.path.exists(txt_path):
-        raise HTTPException(status_code=404, detail="Subtitle text file not found.")
+def get_frame_range_iou(range1, range2):
+    """Calculates the Intersection over Union (IoU) for two 1D ranges."""
+    start1, end1 = range1
+    start2, end2 = range2
     
-    original_stem = result.get("original_filename", "unknown")
-    return FileResponse(
-        path=txt_path,
-        media_type='text/plain',
-        filename=f"{original_stem}_subtitles.txt"
-    )
-
-
-@app.get("/stream_video/{task_id}", include_in_schema=False)
-async def stream_video(task_id: str):
-    """Streams the video file for the editor's <video> tag."""
-    result = TASK_RESULTS.get(task_id)
-    if not result or not result.get("video_path") or not os.path.exists(result["video_path"]):
-        raise HTTPException(status_code=404, detail="Video for this task not found.")
+    intersection_start = max(start1, start2)
+    intersection_end = min(end1, end2)
     
-    video_path = result["video_path"]
-    return FileResponse(video_path, media_type="video/mp4", headers={"Accept-Ranges": "bytes"})
+    intersection_length = max(0, intersection_end - intersection_start + 1)
+    if intersection_length == 0:
+        return 0
+        
+    union_length = (end1 - start1 + 1) + (end2 - start2 + 1) - intersection_length
+    
+    return intersection_length / union_length if union_length > 0 else 0
 
 
 class AdjustIntervalRequest(BaseModel):
