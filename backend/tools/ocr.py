@@ -67,9 +67,10 @@ class OcrRecogniser:
                          # 设置文本识别模型路径
                          rec_model_dir=self.convertToOnnxModelIfNeeded(config.REC_MODEL_PATH),
                          max_batch_size=config.MAX_BATCH_SIZE,
+                         det_db_box_thresh=config.DET_DB_BOX_THRESH,
                          det=True,
                          use_angle_cls=False,
-                         drop_score=0,
+                         drop_score=config.DROP_SCORE,
                          lang=config.REC_CHAR_TYPE,
                          ocr_version=f'PP-OCR{config.MODEL_VERSION.lower()}',
                          rec_image_shape=config.REC_IMAGE_SHAPE,
