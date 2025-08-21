@@ -333,11 +333,11 @@ def detect_subtitles_task(task_id: str, temp_video_path: str, status_file: str):
                 "status": "Completed",
                 "intervals": [
                     {
-                        "frame_range": (start, end),
+                        "frame_range": frame_range,
                         "coords": coord,
-                        "text": "" # Text will be added by the editor
+                        "text": ""
                     }
-                    for start, end, coord in zip(sub_frame_no_list_continuous, sub_frame_no_list_continuous, distinct_coords)
+                    for frame_range, coord in zip(sub_frame_no_list_continuous, distinct_coords)
                 ],
                 "video_width": video_width,
                 "video_height": video_height,
@@ -366,17 +366,20 @@ async def get_subtitle_intervals(task_id: str):
     result = TASK_RESULTS.get(task_id)
     if not result:
         raise HTTPException(status_code=404, detail="Task not found")
-    intervals = []
-    for idx, (coord, frame_range) in enumerate(zip(result.get("intervals", []), result.get("intervals", []))):
+
+    response_intervals = []
+    # The unified data structure is now a list of interval objects
+    for idx, interval in enumerate(result.get("intervals", [])):
+        frame_range_tuple = interval.get('frame_range', (0, 0))
         # Per editor requirements, convert 1-based frame ranges from backend detection
         # to 0-based for the frontend video player.
-        intervals.append({
+        response_intervals.append({
             "interval_idx": idx,
-            "frame_range": (frame_range['frame_range'][0] - 1, frame_range['frame_range'][1] - 1),
-            "coords": coord['coords'],
-            "text": coord.get('text', '')
+            "frame_range": (frame_range_tuple[0] - 1, frame_range_tuple[1] - 1),
+            "coords": interval.get('coords'),
+            "text": interval.get('text', '')
         })
-    return {"intervals": intervals}
+    return {"intervals": response_intervals}
 
 
 # Draw subtitle boxes on the video for users to visualize and adjust later

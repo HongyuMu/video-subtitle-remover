@@ -1224,6 +1224,45 @@
             }
         };
 
+        // --- SUBTITLE PLAYER FUNCTIONS ---
+        // Rebuilds the subtitle list on the left-hand side. It now uses frames
+        // from the main 'intervals' state, ensuring synchronization.
+        function populateSubtitlePlayer(subtitles) {
+            subtitlePlayer.innerHTML = ''; // Clear existing
+            subtitles.forEach((sub, index) => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = 'subtitle-line';
+                
+                const frameSpan = document.createElement('span');
+                frameSpan.className = 'subtitle-timestamp';
+                // Display 1-based frame numbers
+                frameSpan.textContent = `Frame: ${sub.frame_range[0] + 1} --> ${sub.frame_range[1] + 1}`;
+                
+                const textSpan = document.createElement('span');
+                // Use a placeholder if text is empty
+                textSpan.textContent = sub.text || '(No subtitle text generated)';
+
+                lineDiv.appendChild(frameSpan);
+                lineDiv.appendChild(textSpan);
+
+                lineDiv.onclick = () => onSubtitleClick(sub.frame_range[0]);
+                subtitlePlayer.appendChild(lineDiv);
+            });
+        }
+
+        function onSubtitleClick(frame) {
+            // Seeks the video to the start frame of the clicked interval.
+            // A small time offset is added to ensure we land on the correct frame.
+            const targetTime = (frame / taskInfo.fps) + (1 / (taskInfo.fps * 2));
+            video.currentTime = targetTime;
+            
+            // Immediately load the interval to update controls without waiting for draw loop
+            const clickedIdx = findActiveInterval(frame);
+            if (clickedIdx !== -1 && clickedIdx !== currentIntervalIdx) {
+                loadInterval(clickedIdx, true);
+            }
+        }
+
         // --- START THE APPLICATION ---
         
         // Kick off the entire process when the page first loads.
