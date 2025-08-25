@@ -107,7 +107,7 @@ class SubtitleDetect:
                 try:
                     progress_pct = int((current_frame_no / frame_count) * 100)
                     with open(status_file_path, 'w') as f:
-                        json.dump({"status": "Detecting...", "progress": progress_pct}, f)
+                        json.dump({"status": "Generating Subtitles...", "stage": "Detecting", "progress": progress_pct}, f)
                 except Exception:
                     pass
             if sub_remover:

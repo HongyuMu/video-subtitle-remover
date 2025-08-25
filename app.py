@@ -374,7 +374,28 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
     Background task to perform subtitle extraction and generate SRT and TXT files.
     """
     try:
-        # The new SubtitleExtractor handles everything internally
+        # --- 1. Detect subtitle areas since they were not pre-detected ---
+        print("Starting subtitle detection within generation task...")
+        subtitle_detect = SubtitleDetect(video_path=video_path)
+        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_path)
+
+        if not subtitle_frame_no_box_dict:
+            raise ValueError("No subtitles found during detection phase.")
+
+        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+        
+        cap = cv2.VideoCapture(video_path)
+        fps = round(cap.get(cv2.CAP_PROP_FPS), 2)
+        cap.release()
+
+        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
+        detected_areas = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+        
+        TASK_RESULTS[task_id]['detected_areas'] = detected_areas
+        print("Subtitle detection finished.")
+
+        # --- 2. Extract subtitles using the detected areas ---
         extractor = SubtitleExtractor(video_path=video_path, status_path=status_path, detected_areas=detected_areas)
         generated_srt_path, subtitle_content = extractor.generate_subtitle_file()
 
