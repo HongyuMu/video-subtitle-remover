@@ -371,20 +371,20 @@
                 originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
                 taskInfo = infoData;
                 
-                // Show the subtitle player container immediately
-                subtitlePlayerContainer.style.display = 'flex';
-                populateSubtitlePlayer(intervals);
-
-                if (infoData.status === 'Generation Complete') {
-                    // If subtitles are already generated, hide the button and enable controls
-                    generateSubtitlesBtn.style.display = 'none';
+                if (infoData.status === 'Generation Complete' && infoData.download_url) {
+                    // If subtitles are already generated, enable controls and load them
                     setAllControlsDisabled(false);
-                } else {
-                    // Otherwise, disable controls until subtitles are generated
-                    generateSubtitlesBtn.style.display = 'block'; // Ensure it's visible
+                    generateSubtitlesBtn.style.display = 'none';
+                    loadAndDisplaySubtitles(infoData.download_url);
+                } else if (intervals.length === 0) {
+                    // No intervals yet, so disable controls until subtitles are generated
                     setAllControlsDisabled(true);
+                    intervalInfo.textContent = "Click 'Generate Subtitles' to begin.";
+                } else {
+                    // Fallback for older tasks with pre-detected intervals
+                    setAllControlsDisabled(false);
                 }
-                
+
                 updateSliderSteps();
 
                 // The seeking event is triggered when the user jumps to a new frame
@@ -413,7 +413,9 @@
                     console.log(`[INIT] Timeline max: ${timeline.max}`);
                     timeline.step = 1;
 
-                    loadInterval(0);
+                    if (intervals.length > 0) {
+                        loadInterval(0);
+                    }
                     requestAnimationFrame(drawLoop);
                 };
 
@@ -424,7 +426,7 @@
         }
 
         function getCurrentFrame() {
-            return Math.floor(video.currentTime * taskInfo.fps + 0.5);
+            return Math.floor(video.currentTime * taskInfo.fps);
         }
 
         // Intervals from server are 0-based, matching the video's 0-based frame index.
@@ -569,8 +571,8 @@
             }
 
             // Sync subtitle player with video
-            if (intervals && intervals.length > 0) {
-                const activeSubIndex = findActiveInterval(currentFrame);
+            if (parsedSubtitles && parsedSubtitles.length > 0) {
+                const activeSubIndex = parsedSubtitles.findIndex(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
                 if (activeSubIndex !== currentSubtitleIndex) {
                     if (currentSubtitleIndex !== -1) {
                         subtitlePlayer.children[currentSubtitleIndex]?.classList.remove('active');
@@ -579,10 +581,7 @@
                         const activeLine = subtitlePlayer.children[activeSubIndex];
                         if (activeLine) {
                             activeLine.classList.add('active');
-                            // Only scroll into view if the video is playing to avoid jumpiness
-                            if (!video.paused) {
-                                activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }
+                            activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
                         }
                     }
                     currentSubtitleIndex = activeSubIndex;
@@ -841,7 +840,6 @@
                     console.log(`[Interval]`, `Saved interval ${currentIntervalIdx + 1} with frame range [${startFrame}, ${endFrame}]`);
                     // The indices might have changed, so we reload the current interval to be safe
                     loadInterval(currentIntervalIdx);
-                    populateSubtitlePlayer(intervals); // Refresh the subtitle player
                 } else {
                     // If the backend returns an error (e.g., collision), show it to the user.
                     alert(`Error: ${data.detail || 'Could not save interval.'}`);
@@ -1158,7 +1156,6 @@
                     console.log(`[Merge]`, `Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
                     // Load the merged interval and position timeline at the end
                     await loadInterval(newIntervalIdx, false, true);
-                    populateSubtitlePlayer(intervals); // Refresh the subtitle player
                 } else {
                     alert("Failed to merge with previous interval.");
                 }
@@ -1217,8 +1214,7 @@
 
                     // Jump to the first frame of the second interval
                     await loadInterval(newSecondIdx, false, false);
-                    setTimelinePosition(Math.max(0, intervals[newSecondIdx].frame_range[0]));
-                    populateSubtitlePlayer(intervals); // Refresh the subtitle player
+                    setTimelinePosition(Math.max(0, secondPart.frame_range[0]));
                 } else {
                     alert("Failed to split interval.");
                 }
@@ -1228,6 +1224,99 @@
             } finally {
                 splitIntervalBtn.disabled = false;
                 splitIntervalBtn.textContent = "Split Current Interval";
+            }
+        };
+
+        function pollStatus(statusUrl, downloadUrl) {
+            finishBtn.textContent = "Processing...";
+            const overlay = document.getElementById('processing-overlay');
+            const bar = document.getElementById('processing-bar');
+            const pct = document.getElementById('processing-percent');
+            const stageEl = document.getElementById('processing-stage');
+            overlay.style.display = 'flex';
+            const intervalId = setInterval(async () => {
+                try {
+                    const response = await fetch(statusUrl);
+                    if (!response.ok) {
+                        // If status file not found yet, just wait for it to be created.
+                        if (response.status === 404) {
+                            console.log(`[Status]`, "Status file not available yet, waiting...");
+                            return;
+                        }
+                        throw new Error(`Status check failed: ${response.statusText}`);
+                    }
+                    const data = await response.json();
+                    if (data.progress !== undefined) {
+                        finishBtn.textContent = `Processing... ${data.progress}%`;
+                        bar.style.width = `${Math.max(0, Math.min(100, data.progress))}%`;
+                        pct.textContent = `${data.progress}%`;
+                    }
+                    if (data.stage) {
+                        const stageLabel = data.stage === 'inpaint' ? 'Inpainting frames' : (data.stage === 'write' ? 'Writing video' : 'Processing');
+                        stageEl.textContent = `Stage: ${stageLabel}`;
+                    }
+                    if (data.status === "Completed") {
+                        clearInterval(intervalId);
+                        overlay.style.display = 'none';
+                        finishBtn.textContent = "Download Ready!";
+                        alert("Processing complete! Your download is starting.");
+                        window.location.href = downloadUrl;
+                        // Re-enable button after a delay in case of redirect issues
+                        setTimeout(() => {
+                            finishBtn.disabled = false;
+                            finishBtn.textContent = "Finish and Process";
+                        }, 5000);
+                    } else if (data.status && data.status.startsWith("Error:")) {
+                        clearInterval(intervalId);
+                        overlay.style.display = 'none';
+                        alert(`Processing failed: ${data.status}`);
+                        finishBtn.disabled = false;
+                        finishBtn.textContent = "Finish and Process";
+                    }
+                } catch (error) {
+                    console.error("Polling error:", error);
+                    clearInterval(intervalId);
+                    overlay.style.display = 'none';
+                    alert("An error occurred while checking the processing status. Please check the console for details.");
+                    finishBtn.disabled = false;
+                    finishBtn.textContent = "Finish and Process";
+                }
+            }, 3000); // Poll every 3 seconds
+        }
+
+        // This function is called when the user clicks the "Finish and Process" button.
+        finishBtn.onclick = async () => {
+            if (confirm("Once you confirm, you cannot make any changes to the video. Are you sure you want to proceed?")) {
+                finishBtn.disabled = true;
+                finishBtn.textContent = "Processing...";
+                // Show overlay immediately after user confirmation
+                const overlay = document.getElementById('processing-overlay');
+                const bar = document.getElementById('processing-bar');
+                const pct = document.getElementById('processing-percent');
+                const stageEl = document.getElementById('processing-stage');
+                if (overlay) {
+                    overlay.style.display = 'flex';
+                    bar.style.width = '0%';
+                    pct.textContent = '0%';
+                    stageEl.textContent = 'Stage: Preparing';
+                }
+                try {
+                    // Tell the server to start the final video processing job
+                    const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
+                    if (response.ok) {
+                        const data = await response.json();
+                        alert("Processing started! This may take a few minutes. Your download will begin automatically when it's ready.");
+                        pollStatus(data.status_url, data.download_url);
+                    } else {
+                        alert("Failed to start processing.");
+                        finishBtn.disabled = false;
+                        finishBtn.textContent = "Finish and Process";
+                    }
+                } catch (e) {
+                    alert("An error occurred while starting the process.");
+                    finishBtn.disabled = false;
+                    finishBtn.textContent = "Finish and Process";
+                }
             }
         };
 
@@ -1250,23 +1339,18 @@
                         if (infoData.status === "Generation Complete") {
                             clearInterval(pollInterval);
                             generateSubtitlesBtn.textContent = "Subtitles Generated!";
+                            // Hide the generate button and enable all other controls
                             generateSubtitlesBtn.style.display = 'none';
                             setAllControlsDisabled(false);
-                            
-                            // Re-fetch intervals to get the new text and repopulate the player
-                            const intervalsResponse = await fetch(`/subtitle_intervals/${taskId}`);
-                            const intervalsData = await intervalsResponse.json();
-                            intervals = intervalsData.intervals;
-                            originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
-                            populateSubtitlePlayer(intervals);
-
+                            await loadAndDisplaySubtitles(infoData.download_url);
+                            await refreshIntervals();
                         } else if (infoData.status === "Generation Error") {
                             clearInterval(pollInterval);
                             alert(`Error generating subtitles: ${infoData.message}`);
                             generateSubtitlesBtn.disabled = false;
                             generateSubtitlesBtn.textContent = "Generate Subtitles";
                         } else {
-                            // Update status for the user (optional, can show progress)
+                            // Update status for the user
                             const progress = infoData.progress || 0;
                             generateSubtitlesBtn.textContent = `Generating... ${progress}%`;
                         }
@@ -1287,42 +1371,121 @@
             }
         };
 
-        // --- SUBTITLE PLAYER FUNCTIONS ---
-        // Rebuilds the subtitle list on the left-hand side. It now uses frames
-        // from the main 'intervals' state, ensuring synchronization.
+        // --- NEW SUBTITLE PLAYER FUNCTIONS ---
+        async function refreshIntervals() {
+            try {
+                const intervalsResponse = await fetch(`/subtitle_intervals/${taskId}`);
+                const intervalsData = await intervalsResponse.json();
+                intervals = intervalsData.intervals;
+                originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
+
+                if (intervals.length > 0) {
+                    loadInterval(0); // Load the first new interval into the editor
+                } else {
+                    intervalInfo.textContent = "No subtitle intervals were found after generation.";
+                    setAllControlsDisabled(true); // Re-disable if something went wrong
+                }
+            } catch (error) {
+                console.error("Failed to refresh intervals:", error);
+                alert("Could not load new subtitle intervals from the server.");
+            }
+        }
+        
+        async function loadAndDisplaySubtitles(url) {
+            try {
+                const response = await fetch(url);
+                if (!response.ok) throw new Error(`Failed to fetch subtitles: ${response.statusText}`);
+                const subtitleText = await response.text();
+                
+                parsedSubtitles = parseSubtitleFile(subtitleText);
+                populateSubtitlePlayer(parsedSubtitles);
+                subtitlePlayerContainer.style.display = 'flex';
+            } catch (error) {
+                console.error("Could not load subtitles:", error);
+            }
+        }
+
+        function timecodeToSeconds(timecode) {
+            const parts = timecode.split(/[:,]/);
+            if (parts.length !== 4) return 0;
+            const hours = parseInt(parts[0], 10);
+            const minutes = parseInt(parts[1], 10);
+            const seconds = parseInt(parts[2], 10);
+            const milliseconds = parseInt(parts[3], 10);
+            return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
+        }
+
+        function secondsToTimecode(totalSeconds) {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = Math.floor(totalSeconds % 60);
+            const milliseconds = Math.round((totalSeconds - Math.floor(totalSeconds)) * 1000);
+            
+            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')},${String(milliseconds).padStart(3, '0')}`;
+        }
+
+        function parseCoords(coordString) {
+            // Example: (Coordinates: (12, 461, 989, 1026))
+            const match = coordString.match(/\((\d+), (\d+), (\d+), (\d+)\)/);
+            if (match) {
+                const [_, xmin, xmax, ymin, ymax] = match.map(Number);
+                return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+            }
+            return null;
+        }
+
+        function parseSubtitleFile(text) {
+            const subs = [];
+            const blocks = text.trim().split(/\n\n+/);
+            for (const block of blocks) {
+                const lines = block.trim().split('\n');
+                if (lines.length < 3) continue;
+
+                const index = parseInt(lines[0], 10);
+                const timeParts = lines[1].split(' --> ');
+                if (timeParts.length !== 2) continue;
+
+                const startTime = timecodeToSeconds(timeParts[0]);
+                const endTime = timecodeToSeconds(timeParts[1]);
+                
+                const coordLineIndex = lines.findIndex(l => l.startsWith('(Coordinates:'));
+                const textLines = lines.slice(2, coordLineIndex !== -1 ? coordLineIndex : lines.length);
+                const textContent = textLines.join('\n');
+                const coords = coordLineIndex !== -1 ? parseCoords(lines[coordLineIndex]) : null;
+
+                subs.push({ index, startTime, endTime, text: textContent, coords });
+            }
+            return subs;
+        }
+        
         function populateSubtitlePlayer(subtitles) {
             subtitlePlayer.innerHTML = ''; // Clear existing
-            subtitles.forEach((sub, index) => {
+            subtitles.forEach(sub => {
                 const lineDiv = document.createElement('div');
                 lineDiv.className = 'subtitle-line';
                 
-                const frameSpan = document.createElement('span');
-                frameSpan.className = 'subtitle-timestamp';
-                // Display 1-based frame numbers
-                frameSpan.textContent = `Frame: ${sub.frame_range[0] + 1} --> ${sub.frame_range[1] + 1}`;
+                const timeSpan = document.createElement('span');
+                timeSpan.className = 'subtitle-timestamp';
+                timeSpan.textContent = `${secondsToTimecode(sub.startTime)} --> ${secondsToTimecode(sub.endTime)}`;
                 
                 const textSpan = document.createElement('span');
-                // Use a placeholder if text is empty
-                textSpan.textContent = sub.text || '(No subtitle text generated)';
+                textSpan.textContent = sub.text;
 
-                lineDiv.appendChild(frameSpan);
+                lineDiv.appendChild(timeSpan);
                 lineDiv.appendChild(textSpan);
 
-                lineDiv.onclick = () => onSubtitleClick(sub.frame_range[0]);
+                lineDiv.onclick = () => onSubtitleClick(sub.startTime);
                 subtitlePlayer.appendChild(lineDiv);
             });
         }
 
-        function onSubtitleClick(frame) {
-            // Seeks the video to the start frame of the clicked interval.
-            // A small time offset is added to ensure we land on the correct frame.
-            const targetTime = (frame / taskInfo.fps) + (1 / (taskInfo.fps * 2));
-            video.currentTime = targetTime;
-            
-            // Immediately load the interval to update controls without waiting for draw loop
-            const clickedIdx = findActiveInterval(frame);
-            if (clickedIdx !== -1 && clickedIdx !== currentIntervalIdx) {
-                loadInterval(clickedIdx, true);
+        function onSubtitleClick(startTime) {
+            // Add a small epsilon to avoid floating point issues where the time might be
+            // slightly less than the intended frame's start time, causing it to round down.
+            const epsilon = 1 / (taskInfo.fps * 2);
+            video.currentTime = startTime + epsilon;
+            if (video.paused) {
+                 // The drawLoop will handle drawing the box
             }
         }
 

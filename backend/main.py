@@ -107,7 +107,7 @@ class SubtitleDetect:
                 try:
                     progress_pct = int((current_frame_no / frame_count) * 100)
                     with open(status_file_path, 'w') as f:
-                        json.dump({"status": "Detecting...", "progress": progress_pct}, f)
+                        json.dump({"status": "Generating Subtitles...", "stage": "Detecting", "progress": progress_pct}, f)
                 except Exception:
                     pass
             if sub_remover:
@@ -1334,7 +1334,7 @@ class SubtitleExtractor:
                 os.makedirs(os.path.dirname(srt_filename))
             with open(srt_filename, 'w') as f:
                 pass  # create empty file
-            return srt_filename
+            return srt_filename, []
 
         subtitle_content = self._remove_duplicate_subtitle()
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
@@ -1350,7 +1350,7 @@ class SubtitleExtractor:
                 subtitle_line = f'{line_code}\n{frame_start} --> {frame_end}\n{frame_content}\n(Coordinates: {coordinate})\n\n'
                 f.write(subtitle_line)
         print(f"Subtitle file generated at: {srt_filename}")
-        return srt_filename
+        return srt_filename, subtitle_content
 
     @staticmethod
     def srt2txt(srt_file):
@@ -1536,7 +1536,7 @@ if __name__ == '__main__':
 
             sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
             print(f"Bitrate of original video: {sd.get_video_bitrate(video_path)} kbps")
-            sd.run()
+            srt_filename, subtitle_content = sd.generate_subtitle_file()
             print(f"Bitrate of processed video: {sd.get_video_bitrate(sd.video_out_name)} kbps")
         except FileNotFoundError:
             print(f"Error: The file '{json_path}' was not found.")
