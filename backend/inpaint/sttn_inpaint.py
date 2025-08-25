@@ -61,24 +61,16 @@ class STTNInpaint:
 
         # store final video frames
         inpainted_frames = []
-        
-        scaled_masks = []
         for k in range(len(inpaint_area)):
             frames_scaled[k] = []
-            mask_crop = mask[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-            mask_scaled = cv2.resize(mask_crop, (self.model_input_width, self.model_input_height), interpolation=cv2.INTER_NEAREST)
-            if mask_scaled.ndim == 2:
-                mask_scaled = mask_scaled[:, :, None]
-            scaled_masks.append(mask_scaled)
 
         for j in range(len(frames_hr)):
             image = frames_hr[j]
             # crop and resize each subtitle area
             for k in range(len(inpaint_area)):
                 image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))
-                image_masked = image_resize * (1 - scaled_masks[k])
-                frames_scaled[k].append(image_masked)
+                image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))  # 缩放
+                frames_scaled[k].append(image_resize)
 
         # process each subtitle area
         for k in range(len(inpaint_area)):
