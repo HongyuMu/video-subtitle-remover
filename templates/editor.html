@@ -376,9 +376,13 @@
                     setAllControlsDisabled(false);
                     generateSubtitlesBtn.style.display = 'none';
                     loadAndDisplaySubtitles(infoData.download_url);
-                } else {
-                    // Otherwise, disable controls until subtitles are generated
+                } else if (intervals.length === 0) {
+                    // No intervals yet, so disable controls until subtitles are generated
                     setAllControlsDisabled(true);
+                    intervalInfo.textContent = "Click 'Generate Subtitles' to begin.";
+                } else {
+                    // Fallback for older tasks with pre-detected intervals
+                    setAllControlsDisabled(false);
                 }
 
                 updateSliderSteps();
@@ -409,7 +413,9 @@
                     console.log(`[INIT] Timeline max: ${timeline.max}`);
                     timeline.step = 1;
 
-                    loadInterval(0);
+                    if (intervals.length > 0) {
+                        loadInterval(0);
+                    }
                     requestAnimationFrame(drawLoop);
                 };
 
@@ -1337,6 +1343,7 @@
                             generateSubtitlesBtn.style.display = 'none';
                             setAllControlsDisabled(false);
                             await loadAndDisplaySubtitles(infoData.download_url);
+                            await refreshIntervals();
                         } else if (infoData.status === "Generation Error") {
                             clearInterval(pollInterval);
                             alert(`Error generating subtitles: ${infoData.message}`);
@@ -1365,6 +1372,25 @@
         };
 
         // --- NEW SUBTITLE PLAYER FUNCTIONS ---
+        async function refreshIntervals() {
+            try {
+                const intervalsResponse = await fetch(`/subtitle_intervals/${taskId}`);
+                const intervalsData = await intervalsResponse.json();
+                intervals = intervalsData.intervals;
+                originalIntervals = JSON.parse(JSON.stringify(intervalsData.intervals));
+
+                if (intervals.length > 0) {
+                    loadInterval(0); // Load the first new interval into the editor
+                } else {
+                    intervalInfo.textContent = "No subtitle intervals were found after generation.";
+                    setAllControlsDisabled(true); // Re-disable if something went wrong
+                }
+            } catch (error) {
+                console.error("Failed to refresh intervals:", error);
+                alert("Could not load new subtitle intervals from the server.");
+            }
+        }
+        
         async function loadAndDisplaySubtitles(url) {
             try {
                 const response = await fetch(url);
