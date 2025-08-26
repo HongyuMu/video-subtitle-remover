@@ -39,6 +39,11 @@ class STTNInpaint:
         # 5. set neighbor frames
         self.neighbor_stride = config.STTN_NEIGHBOR_STRIDE
         self.ref_length = config.STTN_REFERENCE_LENGTH
+        # 6. Setup debug directory
+        self.debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
+        os.makedirs(self.debug_dir, exist_ok=True)
+        print(f"[DEBUG] Saving debug images to {self.debug_dir}")
+
 
     def __call__(self, input_frames: List[np.ndarray], input_mask: np.ndarray):
         """
@@ -70,6 +75,13 @@ class STTNInpaint:
             if mask_scaled.ndim == 2:
                 mask_scaled = mask_scaled[:, :, None]
             scaled_masks[k] = mask_scaled
+            
+            # --- DEBUG START (1) ---
+            if k == 0:
+                debug_mask_to_save = (scaled_masks[k] * 255).astype(np.uint8)
+                cv2.imwrite(os.path.join(self.debug_dir, "01_scaled_mask.png"), debug_mask_to_save)
+                print(f"[DEBUG] Saved 01_scaled_mask.png. Shape: {debug_mask_to_save.shape}, Range: ({np.min(debug_mask_to_save)}, {np.max(debug_mask_to_save)})")
+            # --- DEBUG END ---
 
         for j in range(len(frames_hr)):
             image = frames_hr[j]
@@ -80,10 +92,22 @@ class STTNInpaint:
                 image_masked = image_resize * (1 - scaled_masks[k])
                 frames_scaled[k].append(image_masked)
 
+                # --- DEBUG START (2) ---
+                if j == 0 and k == 0:
+                    cv2.imwrite(os.path.join(self.debug_dir, "02_masked_input_frame.png"), image_masked)
+                    print(f"[DEBUG] Saved 02_masked_input_frame.png. Shape: {image_masked.shape}, Range: ({np.min(image_masked)}, {np.max(image_masked)})")
+                # --- DEBUG END ---
+
         # process each subtitle area
         for k in range(len(inpaint_area)):
             try:
                 comps[k] = self.inpaint(frames_scaled[k])
+                # --- DEBUG START (3) ---
+                if k == 0 and comps[k] and comps[k][0] is not None:
+                    comp_to_save = comps[k][0]
+                    cv2.imwrite(os.path.join(self.debug_dir, "03_inpainted_patch_from_model.png"), comp_to_save)
+                    print(f"[DEBUG] Saved 03_inpainted_patch_from_model.png. Shape: {comp_to_save.shape}, Range: ({np.min(comp_to_save)}, {np.max(comp_to_save)})")
+                # --- DEBUG END ---
             except Exception as e:
                 print(f"[ERROR] Exception in self.inpaint(frames_scaled[{k}]): {e}")
                 traceback.print_exc()
@@ -97,6 +121,11 @@ class STTNInpaint:
                     try:
                         comp = cv2.resize(comps[k][j], (W_ori, split_h))
                         comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_RGB2BGR)  # convert color space
+                        # --- DEBUG START (4) ---
+                        if j == 0 and k == 0:
+                            cv2.imwrite(os.path.join(self.debug_dir, "04_resized_blended_patch.png"), comp)
+                            print(f"[DEBUG] Saved 04_resized_blended_patch.png. Shape: {comp.shape}, Range: ({np.min(comp)}, {np.max(comp)})")
+                        # --- DEBUG END ---
                     except Exception as e:
                         print(f"[ERROR] Exception in cv2.resize or cvtColor: {e}")
                         raise
@@ -107,6 +136,12 @@ class STTNInpaint:
                     # Blend the inpainted result with original frame using mask
                     blended = mask_area * comp + (1 - mask_area) * original_crop
                     frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = blended.astype(np.uint8)
+                
+                # --- DEBUG START (5) ---
+                if j == 0:
+                    cv2.imwrite(os.path.join(self.debug_dir, "05_final_frame_0.png"), frame)
+                    print(f"[DEBUG] Saved 05_final_frame_0.png. Shape: {frame.shape}, Range: ({np.min(frame)}, {np.max(frame)})")
+                # --- DEBUG END ---
                 
                 # add final frame to list
                 inpainted_frames.append(frame)
@@ -155,6 +190,12 @@ class STTNInpaint:
         """
         use STTN to complete inpainting
         """
+        # --- DEBUG START (Input) ---
+        if frames:
+            first_frame = frames[0]
+            print(f"[DEBUG] Input to inpaint() - Shape: {first_frame.shape}, Dtype: {first_frame.dtype}, Range: ({np.min(first_frame)}, {np.max(first_frame)})")
+        # --- DEBUG END ---
+
         frame_length = len(frames)
         # preprocess frames to tensor and normalize
         feats = _to_tensors(frames).unsqueeze(0) * 2 - 1
