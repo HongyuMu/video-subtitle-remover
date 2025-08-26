@@ -183,6 +183,16 @@
         .subtitle-line.active .subtitle-timestamp {
             color: #f8f9fa;
         }
+
+        /* Make canvas interactive for the universal bounding box */
+        #preview-canvas.interactive {
+            pointer-events: auto;
+            cursor: crosshair;
+        }
+        #preview-canvas.interactive.resizing-ew { cursor: ew-resize; }
+        #preview-canvas.interactive.resizing-ns { cursor: ns-resize; }
+        #preview-canvas.interactive.moving { cursor: move; }
+
     </style>
 </head>
 <body>
@@ -213,6 +223,13 @@
             <div class="controls">
                 <div class="extra-controls">
                     <button id="generate-subtitles-btn">Generate Subtitles</button>
+                </div>
+                <div id="universal-box-controls" style="display: none; border: 1px solid #ccc; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                    <strong>Universal Subtitle Area</strong>
+                    <p style="font-size: 0.8em; color: #666;">Adjust the box on the video to define the area for subtitle detection.</p>
+                    <button id="set-universal-box-btn" style="width: 100%; margin-top: 5px;">Set and Generate Subtitles</button>
+                    <button id="clear-universal-box-btn" style="width: 100%; margin-top: 5px; background-color: #6c757d;">Use Automatic Detection</button>
+                    <div id="universal-box-coords" style="font-size: 0.8em; margin-top: 10px; font-family: monospace;"></div>
                 </div>
                 <div class="timeline-container">
                     <label for="timeline-slider">Timeline:</label>
@@ -293,6 +310,8 @@
         let isUpdated = false;
         let parsedSubtitles = []; // Holds subtitles from the generated .txt file
         let currentSubtitleIndex = -1; // Tracks the currently highlighted subtitle in the player
+        let universalBox = null; // Holds the state of the user-defined universal bounding box
+        let isUniversalBoxMode = false; // Flag to enable universal box interaction
 
         // Helper function to disable controls during async operations like seeking
         function setControlsDisabled(disabled) {
@@ -356,6 +375,10 @@
         const subtitlePlayerContainer = document.querySelector('.subtitle-player-container');
         const subtitlePlayer = document.getElementById('subtitle-player');
         const generateSubtitlesBtn = document.getElementById('generate-subtitles-btn');
+        const universalBoxControls = document.getElementById('universal-box-controls');
+        const setUniversalBoxBtn = document.getElementById('set-universal-box-btn');
+        const clearUniversalBoxBtn = document.getElementById('clear-universal-box-btn');
+        const universalBoxCoordsEl = document.getElementById('universal-box-coords');
 
         // This is the main function that runs when the page first loads.
         async function initializeEditor() {
@@ -375,11 +398,15 @@
                     // If subtitles are already generated, enable controls and load them
                     setAllControlsDisabled(false);
                     generateSubtitlesBtn.style.display = 'none';
+                    universalBoxControls.style.display = 'none';
                     loadAndDisplaySubtitles(infoData.download_url);
                 } else if (intervals.length === 0) {
-                    // No intervals yet, so disable controls until subtitles are generated
+                    // No intervals yet, so disable editor controls and enable universal box mode
                     setAllControlsDisabled(true);
-                    intervalInfo.textContent = "Click 'Generate Subtitles' to begin.";
+                    intervalInfo.textContent = "Define a universal subtitle area or use automatic detection.";
+                    generateSubtitlesBtn.style.display = 'none'; // Hide original button
+                    universalBoxControls.style.display = 'block'; // Show new controls
+                    isUniversalBoxMode = true;
                 } else {
                     // Fallback for older tasks with pre-detected intervals
                     setAllControlsDisabled(false);
@@ -413,7 +440,10 @@
                     console.log(`[INIT] Timeline max: ${timeline.max}`);
                     timeline.step = 1;
 
-                    if (intervals.length > 0) {
+                    if (isUniversalBoxMode) {
+                        universalBox = getInitialBoundingBox();
+                        canvas.classList.add('interactive');
+                    } else if (intervals.length > 0) {
                         loadInterval(0);
                     }
                     requestAnimationFrame(drawLoop);
@@ -527,7 +557,11 @@
             canvas.width = video.clientWidth;
             canvas.height = video.clientHeight;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            drawBoundingBox(box);
+            if (isUniversalBoxMode && universalBox) {
+                drawBoundingBox(universalBox, 'lime');
+            } else if (box) {
+                drawBoundingBox(box, 'lime');
+            }
         }
         
         function drawLoop() {
@@ -548,7 +582,12 @@
             let boxToDraw = null;
             let activeIdx = -1;
 
-            if (video.paused) {
+            if (isUniversalBoxMode && universalBox) {
+                boxToDraw = universalBox;
+                if (universalBoxCoordsEl) {
+                    universalBoxCoordsEl.textContent = `X: ${universalBox.x}, Y: ${universalBox.y}, W: ${universalBox.width}, H: ${universalBox.height}`;
+                }
+            } else if (video.paused) {
                 // When paused, always draw the box for the currently selected interval
                 activeIdx = currentIntervalIdx;
             } else {
@@ -567,7 +606,7 @@
             }
 
             if (boxToDraw) {
-                drawBoundingBox(boxToDraw);
+                drawBoundingBox(boxToDraw, 'lime');
             }
 
             // Sync subtitle player with video
@@ -591,13 +630,25 @@
             requestAnimationFrame(drawLoop);
         }
 
-        function drawBoundingBox(box) {
+        function drawBoundingBox(box, color = 'lime') {
             // Scale box coordinates from original video dimensions to displayed video dimensions
             const scaleX = canvas.width / taskInfo.video_width;
             const scaleY = canvas.height / taskInfo.video_height;
-            ctx.strokeStyle = 'lime';
+            ctx.strokeStyle = color;
             ctx.lineWidth = 2;
             ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
+        }
+
+        // --- NEW ---
+        function getInitialBoundingBox() {
+            const videoWidth = taskInfo.video_width;
+            const videoHeight = taskInfo.video_height;
+            const boxWidth = Math.round(videoWidth * 0.75);
+            const boxHeight = Math.round(videoHeight * 0.2); // A sensible default height
+            const boxX = Math.round((videoWidth - boxWidth) / 2);
+            const boxY = Math.round(videoHeight - boxHeight - (videoHeight * 0.05)); // 5% from the bottom
+            
+            return { x: boxX, y: boxY, width: boxWidth, height: boxHeight };
         }
         
         // MOUSE INTERACTION: DRAG/RESIZE BOX
@@ -615,6 +666,9 @@
         }
 
         function getCurrentBox() {
+            if (isUniversalBoxMode) {
+                return universalBox;
+            }
             if (!intervals[currentIntervalIdx]) return null;
             const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
             return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
@@ -670,7 +724,11 @@
             else if (mode === 'top' || mode === 'bottom') cursor = 'ns-resize';
             else if (mode === 'move') cursor = 'move';
             // Do not set cursor if the cursor is not in the proximity of the box
-            canvas.style.cursor = cursor;
+            if (isUniversalBoxMode) {
+                canvas.style.cursor = cursor;
+            } else {
+                canvas.style.cursor = cursor;
+            }
         }
 
         canvas.addEventListener('mousemove', (e) => {
@@ -678,11 +736,15 @@
             const cx = e.clientX - rect.left;
             const cy = e.clientY - rect.top;
             if (!isMouseDown) {
-                setCanvasCursor(cx, cy);
+                if (isUniversalBoxMode) {
+                    setCanvasCursor(cx, cy);
+                }
                 return;
             }
 
-            if (!intervals[currentIntervalIdx]) return;
+            const boxToUpdate = isUniversalBoxMode ? universalBox : (intervals[currentIntervalIdx] ? intervals[currentIntervalIdx] : null);
+            if (!boxToUpdate) return;
+
             const { scaleX, scaleY } = getScale();
             const vx = cx / scaleX;
             const vy = cy / scaleY;
@@ -717,8 +779,12 @@
 
             newBox = clampBox(newBox);
             // Update state and UI
-            intervals[currentIntervalIdx].coords = [newBox.x, newBox.x + newBox.width, newBox.y, newBox.y + newBox.height];
-            updateSliderValues(newBox);
+            if (isUniversalBoxMode) {
+                universalBox = newBox;
+            } else {
+                intervals[currentIntervalIdx].coords = [newBox.x, newBox.x + newBox.width, newBox.y, newBox.y + newBox.height];
+                updateSliderValues(newBox);
+            }
             redrawCanvas(newBox);
         });
 
@@ -742,7 +808,7 @@
             if (!isMouseDown) return;
             isMouseDown = false;
             const box = getCurrentBox();
-            if (box) {
+            if (box && !isUniversalBoxMode) {
                 // Persist to backend
                 saveBox(box);
             }
@@ -755,19 +821,8 @@
         // clicks outside the box (or on video controls) reach the <video> element.
         function updateCanvasPointerEventsFromMouseEvent(e) {
             if (isMouseDown) return; // keep interactions while dragging
-            const rect = canvas.getBoundingClientRect();
-            const cx = e.clientX - rect.left;
-            const cy = e.clientY - rect.top;
-            const within = cx >= 0 && cy >= 0 && cx <= rect.width && cy <= rect.height;
-            if (!within) {
-                canvas.style.pointerEvents = 'none';
-                canvas.style.cursor = 'default';
-                return;
-            }
-            const mode = hitTestOnCanvas(cx, cy);
-            if (mode) {
+            if (isUniversalBoxMode) {
                 canvas.style.pointerEvents = 'auto';
-                setCanvasCursor(cx, cy);
             } else {
                 canvas.style.pointerEvents = 'none';
                 canvas.style.cursor = 'default';
@@ -1340,7 +1395,6 @@
                             clearInterval(pollInterval);
                             generateSubtitlesBtn.textContent = "Subtitles Generated!";
                             // Hide the generate button and enable all other controls
-                            generateSubtitlesBtn.style.display = 'none';
                             setAllControlsDisabled(false);
                             await loadAndDisplaySubtitles(infoData.download_url);
                             await refreshIntervals();
@@ -1370,6 +1424,86 @@
                 generateSubtitlesBtn.textContent = "Generate Subtitles";
             }
         };
+
+        setUniversalBoxBtn.onclick = () => {
+            if (universalBox) {
+                generateSubtitles(universalBox);
+            } else {
+                alert("Please define a bounding box on the video first.");
+            }
+        };
+
+        clearUniversalBoxBtn.onclick = () => {
+            if (confirm("This will use automatic detection. Are you sure?")) {
+                generateSubtitles(null); // Pass null to use automatic detection
+            }
+        };
+
+        async function generateSubtitles(boxData) {
+            const btn = boxData ? setUniversalBoxBtn : clearUniversalBoxBtn;
+            btn.disabled = true;
+            btn.textContent = "Generating...";
+
+            try {
+                const body = boxData ? JSON.stringify(boxData) : null;
+                const headers = boxData ? { 'Content-Type': 'application/json' } : {};
+
+                const response = await fetch(`/generate_subtitle_text/${taskId}`, { 
+                    method: 'POST',
+                    headers: headers,
+                    body: body
+                });
+
+                if (!response.ok) {
+                    throw new Error("Failed to start subtitle generation.");
+                }
+
+                // Hide universal box controls and switch to polling
+                universalBoxControls.style.display = 'none';
+                isUniversalBoxMode = false;
+                canvas.classList.remove('interactive');
+                
+                // Now poll for completion
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const infoResponse = await fetch(`/task_info/${taskId}`);
+                        const infoData = await infoResponse.json();
+
+                        if (infoData.status === "Generation Complete") {
+                            clearInterval(pollInterval);
+                            // Hide the generate button and enable all other controls
+                            setAllControlsDisabled(false);
+                            await loadAndDisplaySubtitles(infoData.download_url);
+                            await refreshIntervals();
+                        } else if (infoData.status === "Generation Error") {
+                            clearInterval(pollInterval);
+                            alert(`Error generating subtitles: ${infoData.message}`);
+                            btn.disabled = false;
+                            btn.textContent = "Set and Generate Subtitles";
+                            clearUniversalBoxBtn.textContent = "Use Automatic Detection";
+                        } else {
+                            // Update status for the user
+                            const progress = infoData.progress || 0;
+                            intervalInfo.textContent = `Generating... ${progress}%`;
+                        }
+                    } catch (pollError) {
+                        clearInterval(pollInterval);
+                        console.error("Polling error:", pollError);
+                        alert("An error occurred while checking generation status.");
+                        btn.disabled = false;
+                        btn.textContent = "Set and Generate Subtitles";
+                        clearUniversalBoxBtn.textContent = "Use Automatic Detection";
+                    }
+                }, 3000);
+
+            } catch (error) {
+                console.error("Error starting generation:", error);
+                alert("Could not start subtitle generation process.");
+                btn.disabled = false;
+                btn.textContent = "Set and Generate Subtitles";
+                clearUniversalBoxBtn.textContent = "Use Automatic Detection";
+            }
+        }
 
         // --- NEW SUBTITLE PLAYER FUNCTIONS ---
         async function refreshIntervals() {
