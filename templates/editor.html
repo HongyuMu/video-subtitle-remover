@@ -322,15 +322,26 @@
             stepInput.disabled = disabled;
         }
 
-        function setAllControlsDisabled(disabled) {
-            // Select all buttons and inputs in the controls panel
-            const allControls = document.querySelectorAll('.controls button, .controls input');
-            
-            allControls.forEach(control => {
-                // Don't disable the "Generate Subtitles" button itself
-                if (control.id !== 'generate-subtitles-btn') {
-                    control.disabled = disabled;
-                }
+        function setEditorControlsDisabled(disabled) {
+            // This function disables only the controls related to interval-by-interval editing.
+            // It leaves the timeline, video player, and universal box controls functional.
+            const controlsToDisable = [
+                ...Object.values(sliders),
+                ...Object.values(values),
+                prevBtn,
+                nextBtn,
+                useLastBtn,
+                stepInput,
+                resetBtn,
+                notSubBtn,
+                mergePrevBtn,
+                splitIntervalBtn,
+                startFrameInput,
+                endFrameInput
+            ];
+
+            controlsToDisable.forEach(control => {
+                if (control) control.disabled = disabled;
             });
 
             // Also handle the main wrapper visibility
@@ -396,20 +407,25 @@
                 
                 if (infoData.status === 'Generation Complete' && infoData.download_url) {
                     // If subtitles are already generated, enable controls and load them
-                    setAllControlsDisabled(false);
+                    setEditorControlsDisabled(false);
                     generateSubtitlesBtn.style.display = 'none';
                     universalBoxControls.style.display = 'none';
+                    finishBtn.disabled = false;
                     loadAndDisplaySubtitles(infoData.download_url);
                 } else if (intervals.length === 0) {
                     // No intervals yet, so disable editor controls and enable universal box mode
-                    setAllControlsDisabled(true);
-                    intervalInfo.textContent = "Define a universal subtitle area or use automatic detection.";
+                    setEditorControlsDisabled(true);
+                    intervalInfo.textContent = "Play video, adjust the box to cover subtitles, then click 'Set and Generate'.";
                     generateSubtitlesBtn.style.display = 'none'; // Hide original button
                     universalBoxControls.style.display = 'block'; // Show new controls
+                    setUniversalBoxBtn.disabled = false;
+                    clearUniversalBoxBtn.disabled = false;
+                    finishBtn.disabled = true; // Disable final processing until intervals are generated
                     isUniversalBoxMode = true;
                 } else {
                     // Fallback for older tasks with pre-detected intervals
-                    setAllControlsDisabled(false);
+                    setEditorControlsDisabled(false);
+                    finishBtn.disabled = false;
                 }
 
                 updateSliderSteps();
@@ -821,9 +837,29 @@
         // clicks outside the box (or on video controls) reach the <video> element.
         function updateCanvasPointerEventsFromMouseEvent(e) {
             if (isMouseDown) return; // keep interactions while dragging
-            if (isUniversalBoxMode) {
+
+            // This logic allows clicks to "pass through" the canvas to the video player controls
+            // unless the mouse is over the bounding box itself.
+            const rect = canvas.getBoundingClientRect();
+            const cx = e.clientX - rect.left;
+            const cy = e.clientY - rect.top;
+            
+            // First, check if mouse is within canvas bounds at all
+            const within = cx >= 0 && cy >= 0 && cx <= rect.width && cy <= rect.height;
+            if (!within) {
+                canvas.style.pointerEvents = 'none';
+                canvas.style.cursor = 'default';
+                return;
+            }
+
+            // Then, check if we're hitting the box (either universal or interval)
+            const mode = hitTestOnCanvas(cx, cy);
+            if (mode) {
+                // If we're over the box, make the canvas interactive
                 canvas.style.pointerEvents = 'auto';
+                setCanvasCursor(cx, cy);
             } else {
+                // Otherwise, let clicks pass through
                 canvas.style.pointerEvents = 'none';
                 canvas.style.cursor = 'default';
             }
@@ -1395,7 +1431,8 @@
                             clearInterval(pollInterval);
                             generateSubtitlesBtn.textContent = "Subtitles Generated!";
                             // Hide the generate button and enable all other controls
-                            setAllControlsDisabled(false);
+                            setEditorControlsDisabled(false);
+                            finishBtn.disabled = false; // Enable final processing now that we have intervals
                             await loadAndDisplaySubtitles(infoData.download_url);
                             await refreshIntervals();
                         } else if (infoData.status === "Generation Error") {
@@ -1472,7 +1509,8 @@
                         if (infoData.status === "Generation Complete") {
                             clearInterval(pollInterval);
                             // Hide the generate button and enable all other controls
-                            setAllControlsDisabled(false);
+                            setEditorControlsDisabled(false);
+                            finishBtn.disabled = false; // Enable final processing now that we have intervals
                             await loadAndDisplaySubtitles(infoData.download_url);
                             await refreshIntervals();
                         } else if (infoData.status === "Generation Error") {
@@ -1517,7 +1555,7 @@
                     loadInterval(0); // Load the first new interval into the editor
                 } else {
                     intervalInfo.textContent = "No subtitle intervals were found after generation.";
-                    setAllControlsDisabled(true); // Re-disable if something went wrong
+                    setEditorControlsDisabled(true); // Re-disable if something went wrong
                 }
             } catch (error) {
                 console.error("Failed to refresh intervals:", error);
