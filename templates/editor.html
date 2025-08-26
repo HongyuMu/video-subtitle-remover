@@ -486,7 +486,7 @@
             isUpdated = true; // Flag to prevent timeline updates during scrubbing
             timeline.value = frame;
             video.currentTime = frame / taskInfo.fps;
-            currentFrameDisplay.textContent = `Frame: ${frame}`;
+            currentFrameDisplay.textContent = `Frame: ${frame + 1}`;
             // Clear any existing timeout to prevent race conditions
             if (window.timelineScrubbingTimeout) {
                 clearTimeout(window.timelineScrubbingTimeout);
@@ -592,7 +592,7 @@
             // Only update timeline if video is playing AND user is not manually scrubbing
             // This prevents the drawLoop from interfering with manual timeline scrubbing
             if (!video.paused && !isUserScrubbing) {
-                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame + 1}`;
             }
 
             let boxToDraw = null;
@@ -992,7 +992,7 @@
             video.currentTime = clampedFrame / taskInfo.fps;
             
             // Force immediate redraw when manually scrubbing
-            currentFrameDisplay.textContent = `Frame: ${clampedFrame}`;
+            currentFrameDisplay.textContent = `Frame: ${clampedFrame + 1}`;
             const activeIdx = findActiveInterval(clampedFrame);
             if (activeIdx !== -1) {
                 if (activeIdx !== currentIntervalIdx) {
@@ -1077,7 +1077,7 @@
             if (!video.paused && !isUserScrubbing) {
                 const currentFrame = getCurrentFrame();
                 timeline.value = currentFrame;
-                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame + 1}`;
             }
 
             // Do not sync timeline from video while the user is actively scrubbing,
@@ -1091,7 +1091,7 @@
                     currentFrame = parseInt(timeline.max);
                 }
                 timeline.value = currentFrame;
-                currentFrameDisplay.textContent = `Frame: ${currentFrame}`;
+                currentFrameDisplay.textContent = `Frame: ${currentFrame + 1}`;
                 console.log(`[Video]`, currentFrame);
                 
                 // When paused, if the frame has changed to a new interval, load it.
