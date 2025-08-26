@@ -1,6 +1,5 @@
 import copy
 import time
-import random
 
 import cv2
 import numpy as np
@@ -39,11 +38,6 @@ class STTNInpaint:
         # 5. set neighbor frames
         self.neighbor_stride = config.STTN_NEIGHBOR_STRIDE
         self.ref_length = config.STTN_REFERENCE_LENGTH
-        # 6. Setup debug directory
-        self.debug_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'debug')
-        os.makedirs(self.debug_dir, exist_ok=True)
-        print(f"[DEBUG] Saving debug images to {self.debug_dir}")
-
 
     def __call__(self, input_frames: List[np.ndarray], input_mask: np.ndarray):
         """
@@ -60,54 +54,28 @@ class STTNInpaint:
         inpaint_area = self.get_inpaint_area_by_mask(H_ori, split_h, mask)
 
         # initialize frame storage variables
+        # high resolution frame storage list
         frames_hr = copy.deepcopy(input_frames)
-        frames_scaled = {}
-        scaled_masks = {}
-        comps = {}
+        frames_scaled = {}  # store scaled frames
+        comps = {}  # store completed frames
 
         # store final video frames
         inpainted_frames = []
-
         for k in range(len(inpaint_area)):
             frames_scaled[k] = []
-            mask_crop = mask[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-            mask_scaled = cv2.resize(mask_crop, (self.model_input_width, self.model_input_height), interpolation=cv2.INTER_NEAREST)
-            if mask_scaled.ndim == 2:
-                mask_scaled = mask_scaled[:, :, None]
-            scaled_masks[k] = mask_scaled
-            
-            # --- DEBUG START (1) ---
-            if k == 0:
-                debug_mask_to_save = (scaled_masks[k] * 255).astype(np.uint8)
-                cv2.imwrite(os.path.join(self.debug_dir, "01_scaled_mask.png"), debug_mask_to_save)
-                print(f"[DEBUG] Saved 01_scaled_mask.png. Shape: {debug_mask_to_save.shape}, Range: ({np.min(debug_mask_to_save)}, {np.max(debug_mask_to_save)})")
-            # --- DEBUG END ---
 
         for j in range(len(frames_hr)):
             image = frames_hr[j]
             # crop and resize each subtitle area
             for k in range(len(inpaint_area)):
                 image_crop = image[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))
-                image_masked = image_resize * (1 - scaled_masks[k])
-                frames_scaled[k].append(image_masked)
-
-                # --- DEBUG START (2) ---
-                if j == 0 and k == 0:
-                    cv2.imwrite(os.path.join(self.debug_dir, "02_masked_input_frame.png"), image_masked)
-                    print(f"[DEBUG] Saved 02_masked_input_frame.png. Shape: {image_masked.shape}, Range: ({np.min(image_masked)}, {np.max(image_masked)})")
-                # --- DEBUG END ---
+                image_resize = cv2.resize(image_crop, (self.model_input_width, self.model_input_height))  # 缩放
+                frames_scaled[k].append(image_resize)
 
         # process each subtitle area
         for k in range(len(inpaint_area)):
             try:
                 comps[k] = self.inpaint(frames_scaled[k])
-                # --- DEBUG START (3) ---
-                if k == 0 and comps[k] and comps[k][0] is not None:
-                    comp_to_save = comps[k][0]
-                    cv2.imwrite(os.path.join(self.debug_dir, "03_inpainted_patch_from_model.png"), comp_to_save)
-                    print(f"[DEBUG] Saved 03_inpainted_patch_from_model.png. Shape: {comp_to_save.shape}, Range: ({np.min(comp_to_save)}, {np.max(comp_to_save)})")
-                # --- DEBUG END ---
             except Exception as e:
                 print(f"[ERROR] Exception in self.inpaint(frames_scaled[{k}]): {e}")
                 traceback.print_exc()
@@ -115,34 +83,19 @@ class STTNInpaint:
         # if there is an area to inpaint
         if inpaint_area:
             for j in range(len(frames_hr)):
-                frame = frames_hr[j].copy()  # get original frame and make a copy
+                frame = frames_hr[j]  # get original frame
                 # for each subtitle area
                 for k in range(len(inpaint_area)):
                     try:
                         comp = cv2.resize(comps[k][j], (W_ori, split_h))
-                        comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_RGB2BGR)  # convert color space
-                        # --- DEBUG START (4) ---
-                        if j == 0 and k == 0:
-                            cv2.imwrite(os.path.join(self.debug_dir, "04_resized_blended_patch.png"), comp)
-                            print(f"[DEBUG] Saved 04_resized_blended_patch.png. Shape: {comp.shape}, Range: ({np.min(comp)}, {np.max(comp)})")
-                        # --- DEBUG END ---
                     except Exception as e:
-                        print(f"[ERROR] Exception in cv2.resize or cvtColor: {e}")
+                        print(f"[ERROR] Exception in cv2.resize: {e}")
                         raise
-                    
-                    mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]
-                    original_crop = frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
-                    
-                    # Blend the inpainted result with original frame using mask
-                    blended = mask_area * comp + (1 - mask_area) * original_crop
-                    frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = blended.astype(np.uint8)
-                
-                # --- DEBUG START (5) ---
-                if j == 0:
-                    cv2.imwrite(os.path.join(self.debug_dir, "05_final_frame_0.png"), frame)
-                    print(f"[DEBUG] Saved 05_final_frame_0.png. Shape: {frame.shape}, Range: ({np.min(frame)}, {np.max(frame)})")
-                # --- DEBUG END ---
-                
+                    comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_BGR2RGB)  # convert color space
+                    # get mask area and perform inpainting
+                    mask_area = mask[inpaint_area[k][0]:inpaint_area[k][1], :]  # get mask area
+                    # inpaint mask area
+                    frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = mask_area * comp + (1 - mask_area) * frame[inpaint_area[k][0]:inpaint_area[k][1], :, :]
                 # add final frame to list
                 inpainted_frames.append(frame)
         return inpainted_frames
@@ -157,45 +110,23 @@ class STTNInpaint:
 
     def get_ref_index(self, neighbor_ids, length):
         """
-        Sample reference frames from the entire video.
+        sample reference frames from the entire video
         """
+        # initialize reference frame index list
         ref_index = []
-        
-        # Prioritize frames outside the immediate neighborhood
-        possible_indices = [i for i in range(length) if i not in neighbor_ids]
-
-        # If no frames are available outside the neighborhood (very short clip),
-        # use all frames as potential references
-        if not possible_indices:
-            possible_indices = list(range(length))
-
-        # Sample with a stride to get diverse frames
-        for i in range(0, len(possible_indices), self.ref_length):
-            ref_index.append(possible_indices[i])
-            
-        # If sampling results in too few frames, randomly sample to fill up
-        if len(ref_index) < self.ref_length // 2 and len(possible_indices) > len(ref_index):
-            remaining_indices = [i for i in possible_indices if i not in ref_index]
-            needed = min(len(remaining_indices), self.ref_length - len(ref_index))
-            ref_index.extend(random.sample(remaining_indices, needed))
-        
-        # Ensure there are no duplicates and the list is not empty
-        ref_index = sorted(list(set(ref_index)))
-        if not ref_index:
-            ref_index = [neighbor_ids[0]]
-
+        # iterate over the video length with ref_length
+        for i in range(0, length, self.ref_length):
+            # if current frame is not in neighbor frames
+            if i not in neighbor_ids:
+                # add it to reference frame list
+                ref_index.append(i)
+        # return reference frame index list
         return ref_index
 
     def inpaint(self, frames: List[np.ndarray]):
         """
         use STTN to complete inpainting
         """
-        # --- DEBUG START (Input) ---
-        if frames:
-            first_frame = frames[0]
-            print(f"[DEBUG] Input to inpaint() - Shape: {first_frame.shape}, Dtype: {first_frame.dtype}, Range: ({np.min(first_frame)}, {np.max(first_frame)})")
-        # --- DEBUG END ---
-
         frame_length = len(frames)
         # preprocess frames to tensor and normalize
         feats = _to_tensors(frames).unsqueeze(0) * 2 - 1
@@ -203,8 +134,7 @@ class STTNInpaint:
         feats = feats.to(self.device)
         # initialize a list with the same length as the video, for storing processed frames
         comp_frames = [None] * frame_length
-        counts = np.zeros(frame_length)
-
+            
         # Try to process in smaller batches if we have too many frames
         if frame_length > config.STTN_MAX_LOAD_NUM:
             print(f"[INFO] Processing frames in batches of {config.STTN_MAX_LOAD_NUM}")
@@ -225,20 +155,12 @@ class STTNInpaint:
             neighbor_ids = [i for i in range(max(0, f - self.neighbor_stride), min(frame_length, f + self.neighbor_stride + 1))]
             # get reference frame index
             ref_ids = self.get_ref_index(neighbor_ids, frame_length)
-            
-            # Ensure all indices are within bounds before indexing
-            valid_indices = [i for i in neighbor_ids + ref_ids if i < frame_length]
-            
             # close gradient calculation
             with torch.no_grad():
                 # pass processed frames through encoder to generate feature representation
-                pred_feat = self.model.infer(feats[0, valid_indices, :, :, :])
-                
-                # Separate predicted features for neighbor frames
-                pred_feat_neighbors = pred_feat[:len(neighbor_ids)]
-
+                pred_feat = self.model.infer(feats[0, neighbor_ids + ref_ids, :, :, :])
                 # pass predicted feature through decoder to generate image, apply activation function tanh, then separate tensor
-                pred_img = torch.tanh(self.model.decoder(pred_feat_neighbors)).detach()
+                pred_img = torch.tanh(self.model.decoder(pred_feat[:len(neighbor_ids), :, :, :])).detach()
                 # rescale result tensor to range 0-255 (image pixel value)
                 pred_img = (pred_img + 1) / 2
                 # move tensor back to CPU and convert to NumPy array
@@ -250,14 +172,12 @@ class STTNInpaint:
                     img = np.array(pred_img[i]).astype(np.uint8)
                     if comp_frames[idx] is None:
                         # if the position is empty, assign the new calculated image
-                        comp_frames[idx] = img.astype(np.float32)
-                        counts[idx] = 1
+                        comp_frames[idx] = img
                     else:
                         # if the position has an image, mix the new and old images to improve quality
-                        comp_frames[idx] = (comp_frames[idx] * counts[idx] + img.astype(np.float32)) / (counts[idx] + 1)
-                        counts[idx] += 1
+                        comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
         # return processed frames
-        return [frame.astype(np.uint8) if frame is not None else None for frame in comp_frames]
+        return comp_frames
 
     def _process_in_batches(self, frames: List[np.ndarray], batch_size: int) -> List[np.ndarray]:
         """

@@ -28,6 +28,12 @@ from fastapi import Request, Form
 from backend.main import find_smallest_bounding_box
 import traceback
 
+class UniversalBoundingBox(BaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
+
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
@@ -369,34 +375,66 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
-def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_path: str, status_path: str, detected_areas: dict):
+def generate_subtitle_task(
+    task_id: str, 
+    video_path: str, 
+    srt_path: str, 
+    txt_path: str, 
+    status_path: str, 
+    detected_areas: dict,
+    universal_box: Optional[UniversalBoundingBox] = None
+):
     """
     Background task to perform subtitle extraction and generate SRT and TXT files.
     """
     try:
-        # --- 1. Detect subtitle areas since they were not pre-detected ---
-        print("Starting subtitle detection within generation task...")
-        subtitle_detect = SubtitleDetect(video_path=video_path)
-        subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_path)
+        extractor = None
+        if universal_box:
+            # --- 1A. Use the user-defined universal bounding box ---
+            print("Initializing extractor with user-defined universal bounding box.")
+            # Convert Pydantic model to the tuple format expected by SubtitleExtractor
+            universal_coords = (
+                universal_box.x, 
+                universal_box.x + universal_box.width, 
+                universal_box.y, 
+                universal_box.y + universal_box.height
+            )
+            extractor = SubtitleExtractor(
+                video_path=video_path, 
+                status_path=status_path, 
+                universal_box=universal_coords
+            )
+        else:
+            # --- 1B. Perform auto-detection ---
+            print("Starting subtitle auto-detection...")
+            subtitle_detect = SubtitleDetect(video_path=video_path)
+            subtitle_frame_no_box_dict = subtitle_detect.find_subtitle_frame_no(status_file_path=status_path)
 
-        if not subtitle_frame_no_box_dict:
-            raise ValueError("No subtitles found during detection phase.")
+            if not subtitle_frame_no_box_dict:
+                raise ValueError("No subtitles found during detection phase.")
 
-        unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
-        complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
-        
-        cap = cv2.VideoCapture(video_path)
-        fps = round(cap.get(cv2.CAP_PROP_FPS), 2)
-        cap.release()
+            unified_sub_dict = subtitle_detect.unify_regions(subtitle_frame_no_box_dict)
+            complete_subtitle_frame_no_box_dict = subtitle_detect.prevent_missed_detection(unified_sub_dict)
+            
+            cap = cv2.VideoCapture(video_path)
+            fps = round(cap.get(cv2.CAP_PROP_FPS), 2)
+            cap.release()
 
-        correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
-        detected_areas = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
-        
-        TASK_RESULTS[task_id]['detected_areas'] = detected_areas
-        print("Subtitle detection finished.")
+            correct_subtitle_frame_no_box_dict = subtitle_detect.filter_mistake_sub_area(complete_subtitle_frame_no_box_dict, fps)
+            detected_areas = {frame_no: boxes[0] for frame_no, boxes in correct_subtitle_frame_no_box_dict.items() if boxes}
+            
+            TASK_RESULTS[task_id]['detected_areas'] = detected_areas
+            print("Subtitle auto-detection finished. Initializing extractor with detected areas.")
+            extractor = SubtitleExtractor(
+                video_path=video_path, 
+                status_path=status_path, 
+                detected_areas=detected_areas
+            )
 
-        # --- 2. Extract subtitles using the detected areas ---
-        extractor = SubtitleExtractor(video_path=video_path, status_path=status_path, detected_areas=detected_areas)
+        # --- 2. Extract subtitles using the extractor instance ---
+        if not extractor:
+            raise Exception("Subtitle extractor could not be initialized.")
+            
         generated_srt_path, subtitle_content = extractor.generate_subtitle_file()
 
         if generated_srt_path and os.path.exists(generated_srt_path):
@@ -439,7 +477,7 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
             json.dump({"status": "Error", "message": str(e)}, f)
     finally:
         # Clean up temporary raw subtitle file if created
-        if 'extractor' in locals() and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
+        if 'extractor' in locals() and extractor and hasattr(extractor, 'raw_subtitle_path') and extractor.raw_subtitle_path:
             if os.path.exists(extractor.raw_subtitle_path) and "tmp" in extractor.raw_subtitle_path:
                 os.remove(extractor.raw_subtitle_path)
         if 'generated_srt_path' in locals() and os.path.exists(generated_srt_path):
@@ -447,10 +485,15 @@ def generate_subtitle_task(task_id: str, video_path: str, srt_path: str, txt_pat
 
 
 @app.post("/generate_subtitle_text/{task_id}")
-async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks):
+async def generate_subtitle_text(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    universal_box: Optional[UniversalBoundingBox] = None
+):
     """
     Generates a downloadable TXT file with subtitle content.
     This is now an async operation. Poll /task_info/{task_id} for status.
+    Accepts an optional universal bounding box for subtitle detection.
     """
     result = TASK_RESULTS.get(task_id)
     if not result or not result.get("video_path"):
@@ -476,7 +519,8 @@ async def generate_subtitle_text(task_id: str, background_tasks: BackgroundTasks
         srt_path=str(srt_path),
         txt_path=str(txt_path),
         status_path=str(status_path),
-        detected_areas=result.get("detected_areas", {})
+        detected_areas=result.get("detected_areas", {}),
+        universal_box=universal_box
     )
 
     return {
