@@ -968,32 +968,28 @@ class SubtitleRemover:
                 end_frame_no, coord = start_end_coord_map[start_frame_no]
                 mask = create_mask(self.mask_size, [coord])
 
-                # Inpaint first frame of interval
-                original_frame = frame.copy()
-                if config.LAMA_SUPER_FAST:
-                    inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
-                else:
-                    inpainted_frame = self.lama_inpaint(frame, mask)
-                if self.gui_mode:
-                    self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
-                self.video_writer.write(inpainted_frame)
-                self.update_progress(tbar, 1)
-
-                # Inpaint remaining frames of interval
+                # Collect frames for the interval
+                frames_to_inpaint = [frame]
                 for _ in range(end_frame_no - start_frame_no):
                     ret, frame = self.video_cap.read()
                     if not ret:
                         break
                     current_frame_no += 1
-                    original_frame = frame.copy()
+                    frames_to_inpaint.append(frame)
+
+                # Batch process the frames
+                for batch in batch_generator(frames_to_inpaint, 50):
                     if config.LAMA_SUPER_FAST:
-                        inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+                        inpainted_frames = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in batch]
                     else:
-                        inpainted_frame = self.lama_inpaint(frame, mask)
-                    if self.gui_mode:
-                        self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
-                    self.video_writer.write(inpainted_frame)
-                    self.update_progress(tbar, 1)
+                        inpainted_frames = self.lama_inpaint.inpaint_batch(batch, mask)
+
+                    for i, inpainted_frame in enumerate(inpainted_frames):
+                        if self.gui_mode:
+                            self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
+                        self.video_writer.write(inpainted_frame)
+                    
+                    self.update_progress(tbar, len(batch))
 
     def run(self):
         # 记录开始时间
