@@ -45,7 +45,7 @@ class LamaInpaint:
         mask_batch = torch.cat(mask_tensors, dim=0)
 
         with torch.inference_mode():
-            inpainted_batch = self.model(img_batch, mask_batch)
+            inpainted_batch = self.model.forward(img_batch, mask_batch)
 
         output_images = []
         for i in range(inpainted_batch.shape[0]):
