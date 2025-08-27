@@ -1,5 +1,6 @@
 import copy
 import time
+import random
 
 import cv2
 import numpy as np
@@ -10,7 +11,6 @@ import sys
 import os
 import traceback
 from tqdm import tqdm
-import random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from backend import config
@@ -39,16 +39,6 @@ class STTNInpaint:
         # 5. set neighbor frames
         self.neighbor_stride = config.STTN_NEIGHBOR_STRIDE
         self.ref_length = config.STTN_REFERENCE_LENGTH
-
-        # Add a directory for debugging outputs, ensuring the path is absolute
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        self.debug_dir = os.path.join(project_root, "sttn_debug_output")
-        
-        if os.path.exists(self.debug_dir):
-            import shutil
-            shutil.rmtree(self.debug_dir)
-        os.makedirs(self.debug_dir, exist_ok=True)
-        print(f"[DEBUG] Debug output directory created at: {self.debug_dir}")
 
     def __call__(self, input_frames: List[np.ndarray], input_mask: np.ndarray):
         """
@@ -90,11 +80,6 @@ class STTNInpaint:
                 image_masked = image_resize * (1 - scaled_masks[k])
                 frames_scaled[k].append(image_masked)
 
-                if j == 0: # Save for the first frame of the first interval for inspection
-                    cv2.imwrite(os.path.join(self.debug_dir, f"01_scaled_mask_{k}.png"), scaled_masks[k] * 255)
-                    cv2.imwrite(os.path.join(self.debug_dir, f"02_masked_input_frame_{k}.png"), image_masked)
-                    print(f"[DEBUG] Saved scaled mask and masked input for area {k}")
-
         # process each subtitle area
         for k in range(len(inpaint_area)):
             try:
@@ -110,18 +95,7 @@ class STTNInpaint:
                 # for each subtitle area
                 for k in range(len(inpaint_area)):
                     try:
-                        comp = comps[k][j]
-                        if j == 0: # Save for the first frame of the first interval
-                            comp_to_save = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(os.path.join(self.debug_dir, f"03_inpainted_patch_from_model_{k}.png"), comp_to_save)
-                            print(f"[DEBUG] Saved raw inpainted patch from model for area {k}")
-
-                        comp = cv2.resize(comp, (W_ori, split_h))
-                        if j == 0:
-                            comp_resized_to_save = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(os.path.join(self.debug_dir, f"04_resized_blended_patch_{k}.png"), comp_resized_to_save)
-                            print(f"[DEBUG] Saved resized patch for area {k}")
-                            
+                        comp = cv2.resize(comps[k][j], (W_ori, split_h))
                         comp = cv2.cvtColor(np.array(comp).astype(np.uint8), cv2.COLOR_RGB2BGR)  # convert color space
                     except Exception as e:
                         print(f"[ERROR] Exception in cv2.resize or cvtColor: {e}")
@@ -134,10 +108,6 @@ class STTNInpaint:
                     blended = mask_area * comp + (1 - mask_area) * original_crop
                     frame[inpaint_area[k][0]:inpaint_area[k][1], :, :] = blended.astype(np.uint8)
                 
-                if j == 0:
-                    cv2.imwrite(os.path.join(self.debug_dir, f"05_final_frame_{j}.png"), frame)
-                    print(f"[DEBUG] Saved final blended frame {j}")
-
                 # add final frame to list
                 inpainted_frames.append(frame)
         return inpainted_frames
