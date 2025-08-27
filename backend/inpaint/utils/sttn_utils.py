@@ -90,29 +90,23 @@ class Stack(object):
 
 
 class ToTorchFormatTensor(object):
-    """
-    Converts a PIL.Image (RGB) or numpy.ndarray (H x W x C) in the range [0, 255]
-    to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0]
-    """
+    """ Converts a PIL.Image (RGB) or numpy.ndarray (H x W x C) in the range [0, 255]
+    to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0] """
+
     def __init__(self, div=True):
         self.div = div
 
     def __call__(self, pic):
         if isinstance(pic, np.ndarray):
-            # This was the source of the bug. The original permute was (2, 3, 0, 1)
-            # which is incorrect for a stack of frames (T, H, W, C).
-            # The correct permutation for a stack is (0, 3, 1, 2) to get (T, C, H, W).
-            if pic.ndim == 4:  # T, H, W, C
-                img = torch.from_numpy(pic).permute(0, 3, 1, 2).contiguous()  # T, C, H, W
-            elif pic.ndim == 3:  # H, W, C
-                img = torch.from_numpy(pic).permute(2, 0, 1).contiguous()  # C, H, W
-            else:
-                raise ValueError(f"Unsupported numpy array dimension: {pic.ndim}")
+            # numpy img: [L, C, H, W]
+            img = torch.from_numpy(pic).permute(2, 3, 0, 1).contiguous()
         else:
             # handle PIL Image
-            img = torch.ByteTensor(torch.ByteStorage.from_buffer(pic.tobytes()))
+            img = torch.ByteTensor(
+                torch.ByteStorage.from_buffer(pic.tobytes()))
             img = img.view(pic.size[1], pic.size[0], len(pic.mode))
             # put it from HWC to CHW format
+            # yikes, this transpose takes 80% of the loading time/CPU
             img = img.transpose(0, 1).transpose(0, 2).contiguous()
         img = img.float().div(255) if self.div else img.float()
         return img
