@@ -794,144 +794,60 @@ class SubtitleRemover:
 
     def propainter_mode(self, tbar):
         print('use propainter mode')
-        if self.distinct_coords is not None and self.frame_intervals is not None:
-            intervals = self.frame_intervals
-            coords = self.distinct_coords
+        intervals = self.frame_intervals
+        coords = self.distinct_coords
 
-            start_end_coord_map = dict()
-            for i in range(len(intervals)):
-                start, end = intervals[i]
-                start_end_coord_map[start] = (end, coords[i])
+        start_end_coord_map = dict()
+        for i in range(len(intervals)):
+            start, end = intervals[i]
+            start_end_coord_map[start] = (end, coords[i])
 
-            self.video_inpaint = VideoInpaint(config.PROPAINTER_MAX_LOAD_NUM)
-            print('[Processing] start removing subtitles...')
-            
-            current_frame_no = 0
-            while True:
-                ret, frame = self.video_cap.read()
-                if not ret:
-                    break
-                current_frame_no += 1
+        self.video_inpaint = VideoInpaint(config.PROPAINTER_MAX_LOAD_NUM)
+        print('[Processing] start removing subtitles...')
+        
+        current_frame_no = 0
+        while True:
+            ret, frame = self.video_cap.read()
+            if not ret:
+                break
+            current_frame_no += 1
 
-                if current_frame_no not in start_end_coord_map.keys():
-                    self.video_writer.write(frame)
-                    self.update_progress(tbar, 1)
-                else:
-                    start_frame_no = current_frame_no
-                    end_frame_no, coord = start_end_coord_map[start_frame_no]
-                    xmin, xmax, ymin, ymax = coord
-                    print(f'Processing frames {start_frame_no} to {end_frame_no} with mask {(xmin, xmax, ymin, ymax)}')
-                    
-                    mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-                    mask = create_mask(self.mask_size, mask_area_coordinates)
-                    
-                    frames_need_inpaint = [frame]
-                    for _ in range(end_frame_no - start_frame_no):
-                        ret, frame = self.video_cap.read()
-                        if not ret:
-                            break
-                        current_frame_no += 1
-                        frames_need_inpaint.append(frame)
+            if current_frame_no not in start_end_coord_map.keys():
+                self.video_writer.write(frame)
+                self.update_progress(tbar, 1)
+            else:
+                start_frame_no = current_frame_no
+                end_frame_no, coord = start_end_coord_map[start_frame_no]
+                xmin, xmax, ymin, ymax = coord
+                print(f'Processing frames {start_frame_no} to {end_frame_no} with mask {(xmin, xmax, ymin, ymax)}')
+                
+                mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
+                mask = create_mask(self.mask_size, mask_area_coordinates)
+                
+                frames_need_inpaint = [frame]
+                for _ in range(end_frame_no - start_frame_no):
+                    ret, frame = self.video_cap.read()
+                    if not ret:
+                        break
+                    current_frame_no += 1
+                    frames_need_inpaint.append(frame)
 
-                    if frames_need_inpaint:
-                        # Process frames in batches using VideoInpaint
-                        for batch in batch_generator(frames_need_inpaint, config.PROPAINTER_MAX_LOAD_NUM):
-                            if len(batch) == 1:
-                                single_mask = create_mask(self.mask_size, mask_area_coordinates)
-                                if self.lama_inpaint is None:
-                                    self.lama_inpaint = LamaInpaint()
-                                inpainted_frame = self.lama_inpaint(batch[0], single_mask)
+                if frames_need_inpaint:
+                    # Process frames in batches using VideoInpaint
+                    for batch in batch_generator(frames_need_inpaint, config.PROPAINTER_MAX_LOAD_NUM):
+                        if len(batch) == 1:
+                            single_mask = create_mask(self.mask_size, mask_area_coordinates)
+                            if self.lama_inpaint is None:
+                                self.lama_inpaint = LamaInpaint()
+                            inpainted_frame = self.lama_inpaint(batch[0], single_mask)
+                            self.video_writer.write(inpainted_frame)
+                        else:
+                            inpainted_frames = self.video_inpaint.inpaint(batch, mask)
+                            for j, inpainted_frame in enumerate(inpainted_frames):
                                 self.video_writer.write(inpainted_frame)
-                            else:
-                                inpainted_frames = self.video_inpaint.inpaint(batch, mask)
-                                for j, inpainted_frame in enumerate(inpainted_frames):
-                                    self.video_writer.write(inpainted_frame)
-                                    if self.gui_mode:
-                                        self.preview_frame = cv2.hconcat([batch[j], inpainted_frame])
-                            self.update_progress(tbar, len(batch))
-        else:
-            # Fallback to original logic if no intervals/coords provided
-            sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
-            continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
-            scene_div_points = self.sub_detector.get_scene_div_frame_no(self.video_path)
-            continuous_frame_no_list = self.sub_detector.split_range_by_scene(continuous_frame_no_list, scene_div_points)
-            self.video_inpaint = VideoInpaint(config.PROPAINTER_MAX_LOAD_NUM)
-            print('[Processing] start removing subtitles...')
-            index = 0
-            while True:
-                ret, frame = self.video_cap.read()
-                if not ret:
-                    break
-                index += 1
-                # 如果当前帧没有水印/文本则直接写
-                if index not in sub_list.keys():
-                    self.video_writer.write(frame)
-                    print(f'write frame: {index}')
-                    self.update_progress(tbar, increment=1)
-                    continue
-                # 如果有水印，判断该帧是不是开头帧
-                else:
-                    # 如果是开头帧，则批推理到尾帧
-                    if self.is_current_frame_no_start(index, continuous_frame_no_list):
-                        # print(f'No 1 Current index: {index}')
-                        start_frame_no = index
-                        print(f'find start: {start_frame_no}')
-                        # 找到结束帧
-                        end_frame_no = self.find_frame_no_end(index, continuous_frame_no_list)
-                        # 判断当前帧号是不是字幕起始位置
-                        # 如果获取的结束帧号不为-1则说明
-                        if end_frame_no != -1:
-                            print(f'find end: {end_frame_no}')
-                            # ************ 读取该区间所有帧 start ************
-                            temp_frames = list()
-                            # 将头帧加入处理列表
-                            temp_frames.append(frame)
-                            inner_index = 0
-                            # 一直读取到尾帧
-                            while index < end_frame_no:
-                                ret, frame = self.video_cap.read()
-                                if not ret:
-                                    break
-                                index += 1
-                                temp_frames.append(frame)
-                            # ************ 读取该区间所有帧 end ************
-                            if len(temp_frames) < 1:
-                                # 没有待处理，直接跳过
-                                continue
-                            elif len(temp_frames) == 1:
-                                inner_index += 1
-                                single_mask = create_mask(self.mask_size, sub_list[index])
-                                if self.lama_inpaint is None:
-                                    self.lama_inpaint = LamaInpaint()
-                                inpainted_frame = self.lama_inpaint(frame, single_mask)
-                                self.video_writer.write(inpainted_frame)
-                                print(f'write frame: {start_frame_no + inner_index} with mask {sub_list[start_frame_no]}')
-                                self.update_progress(tbar, increment=1)
-                                continue
-                            else:
-                                # 将读取的视频帧分批处理
-                                # 1. 获取当前批次使用的mask
-                                mask = create_mask(self.mask_size, sub_list[start_frame_no])
-                                for batch in batch_generator(temp_frames, config.PROPAINTER_MAX_LOAD_NUM):
-                                    # 2. 调用批推理
-                                    if len(batch) == 1:
-                                        single_mask = create_mask(self.mask_size, sub_list[start_frame_no])
-                                        if self.lama_inpaint is None:
-                                            self.lama_inpaint = LamaInpaint()
-                                        inpainted_frame = self.lama_inpaint(frame, single_mask)
-                                        self.video_writer.write(inpainted_frame)
-                                        print(f'write frame: {start_frame_no + inner_index} with mask {sub_list[start_frame_no]}')
-                                        inner_index += 1
-                                        self.update_progress(tbar, increment=1)
-                                    elif len(batch) > 1:
-                                        inpainted_frames = self.video_inpaint.inpaint(batch, mask)
-                                        for i, inpainted_frame in enumerate(inpainted_frames):
-                                            self.video_writer.write(inpainted_frame)
-                                            print(f'write frame: {start_frame_no + inner_index} with mask {sub_list[index]}')
-                                            inner_index += 1
-                                            if self.gui_mode:
-                                                self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
-                                    self.update_progress(tbar, increment=len(batch))
+                                if self.gui_mode:
+                                    self.preview_frame = cv2.hconcat([batch[j], inpainted_frame])
+                        self.update_progress(tbar, len(batch))
 
     def sttn_mode_with_no_detection(self, tbar):
         """
@@ -1025,69 +941,59 @@ class SubtitleRemover:
 
     def lama_mode(self, tbar):
         print('use lama mode')
-        # If distinct_coords and frame_intervals are provided, use them for batch processing
-        if self.distinct_coords is not None and self.frame_intervals is not None:
-            intervals = self.frame_intervals
-            coords = self.distinct_coords
+        intervals = self.frame_intervals
+        coords = self.distinct_coords
 
-            frame_to_mask_map = {}
-            for i in range(len(intervals)):
-                start, end = intervals[i]
-                xmin, xmax, ymin, ymax = coords[i]
-                mask = create_mask(self.mask_size, [(xmin, xmax, ymin, ymax)])
-                for frame_idx in range(start, end + 1):
-                    frame_to_mask_map[frame_idx] = mask
-            
-            if self.lama_inpaint is None:
-                self.lama_inpaint = LamaInpaint()
+        start_end_coord_map = dict()
+        for i in range(len(intervals)):
+            start, end = intervals[i]
+            start_end_coord_map[start] = (end, coords[i])
 
-            print('[Processing] start removing subtitles...')
-            index = 0
-            while True:
-                ret, frame = self.video_cap.read()
-                if not ret:
-                    break
-                index += 1
-                
-                original_frame = frame.copy()
-                if index in frame_to_mask_map:
-                    mask = frame_to_mask_map[index]
-                    if config.LAMA_SUPER_FAST:
-                        frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
-                    else:
-                        frame = self.lama_inpaint(frame, mask)
+        if self.lama_inpaint is None:
+            self.lama_inpaint = LamaInpaint()
 
-                if self.gui_mode:
-                    self.preview_frame = cv2.hconcat([original_frame, frame])
-                
+        print('[Processing] start removing subtitles...')
+        current_frame_no = 0
+        while True:
+            ret, frame = self.video_cap.read()
+            if not ret:
+                break
+            current_frame_no += 1
+
+            if current_frame_no not in start_end_coord_map:
                 self.video_writer.write(frame)
                 self.update_progress(tbar, 1)
-        else:
-            # Fallback to original logic if no intervals/coords provided
-            sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
-            if self.lama_inpaint is None:
-                self.lama_inpaint = LamaInpaint()
-            index = 0
-            print('[Processing] start removing subtitles...')
-            while True:
-                ret, frame = self.video_cap.read()
-                if not ret:
-                    break
-                original_frame = frame
-                index += 1
-                if index in sub_list.keys():
-                    mask = create_mask(self.mask_size, sub_list[index])
-                    if config.LAMA_SUPER_FAST:
-                        frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
-                    else:
-                        frame = self.lama_inpaint(frame, mask)
-                if self.gui_mode:
-                    self.preview_frame = cv2.hconcat([original_frame, frame])
-                if self.is_picture:
-                    cv2.imencode(self.ext, frame)[1].tofile(self.video_out_name)
+            else:
+                start_frame_no = current_frame_no
+                end_frame_no, coord = start_end_coord_map[start_frame_no]
+                mask = create_mask(self.mask_size, [coord])
+
+                # Inpaint first frame of interval
+                original_frame = frame.copy()
+                if config.LAMA_SUPER_FAST:
+                    inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
                 else:
-                    self.video_writer.write(frame)
+                    inpainted_frame = self.lama_inpaint(frame, mask)
+                if self.gui_mode:
+                    self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
+                self.video_writer.write(inpainted_frame)
                 self.update_progress(tbar, 1)
+
+                # Inpaint remaining frames of interval
+                for _ in range(end_frame_no - start_frame_no):
+                    ret, frame = self.video_cap.read()
+                    if not ret:
+                        break
+                    current_frame_no += 1
+                    original_frame = frame.copy()
+                    if config.LAMA_SUPER_FAST:
+                        inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+                    else:
+                        inpainted_frame = self.lama_inpaint(frame, mask)
+                    if self.gui_mode:
+                        self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
+                    self.video_writer.write(inpainted_frame)
+                    self.update_progress(tbar, 1)
 
     def run(self):
         # 记录开始时间
