@@ -1,5 +1,5 @@
 import os
-from typing import Union
+from typing import Union, List
 import torch
 import numpy as np
 from PIL import Image
@@ -28,4 +28,32 @@ class LamaInpaint:
             cur_res = np.clip(cur_res * 255, 0, 255).astype('uint8')
             cur_res = cur_res[:orig_height, :orig_width]
             return cur_res
+
+    def inpaint_batch(self, images: List[np.ndarray], mask: np.ndarray) -> List[np.ndarray]:
+        img_tensors = []
+        mask_tensors = []
+        orig_dims = []
+
+        for img in images:
+            h, w = img.shape[:2]
+            orig_dims.append((h, w))
+            img_tensor, mask_tensor = prepare_img_and_mask(img, mask, self.device)
+            img_tensors.append(img_tensor)
+            mask_tensors.append(mask_tensor)
+
+        img_batch = torch.cat(img_tensors, dim=0)
+        mask_batch = torch.cat(mask_tensors, dim=0)
+
+        with torch.inference_mode():
+            inpainted_batch = self.model.forward(img_batch, mask_batch)
+
+        output_images = []
+        for i in range(inpainted_batch.shape[0]):
+            orig_h, orig_w = orig_dims[i]
+            cur_res = inpainted_batch[i].permute(1, 2, 0).detach().cpu().numpy()
+            cur_res = np.clip(cur_res * 255, 0, 255).astype('uint8')
+            cur_res = cur_res[:orig_h, :orig_w]
+            output_images.append(cur_res)
+
+        return output_images
 

@@ -33,6 +33,8 @@ from shapely.geometry import Polygon
 import time
 from tqdm import tqdm
 from backend.models import ModelManager
+import queue
+from threading import Thread
 
 
 class SubtitleDetect:
@@ -661,6 +663,9 @@ class SubtitleRemover:
         for provider in config.ONNX_PROVIDERS:
             print(f"Detected execution provider: {provider}")
 
+        # For multi-threaded video processing
+        self.read_queue = queue.Queue(maxsize=100)
+        self.write_queue = queue.Queue(maxsize=100)
 
         # 总处理进度
         self.progress_total = 0
@@ -792,62 +797,115 @@ class SubtitleRemover:
             except Exception:
                 pass
 
+    def _reader_thread(self):
+        """Reads frames from the video and puts them into the read_queue."""
+        current_frame_no = 0
+        while current_frame_no < self.frame_count:
+            ret, frame = self.video_cap.read()
+            if not ret:
+                break
+            self.read_queue.put((current_frame_no + 1, frame))
+            current_frame_no += 1
+        self.read_queue.put(None)  # Sentinel to signal end of reading
+
+    def _writer_thread(self, tbar):
+        """Gets processed frames from the write_queue and writes them to the video file."""
+        frame_count = 0
+        while True:
+            item = self.write_queue.get()
+            if item is None:  # Sentinel to signal end of writing
+                break
+            frame_no, frame = item
+            self.video_writer.write(frame)
+            self.update_progress(tbar, 1)
+            frame_count += 1
+        print(f"[DEBUG] Writer thread finished. Wrote {frame_count} frames.")
+
     def propainter_mode(self, tbar):
         print('use propainter mode')
         intervals = self.frame_intervals
         coords = self.distinct_coords
 
-        start_end_coord_map = dict()
+        # Create a lookup map for which frames to inpaint
+        frame_to_inpaint_map = {}
         for i in range(len(intervals)):
             start, end = intervals[i]
-            start_end_coord_map[start] = (end, coords[i])
+            for frame_no in range(start, end + 1):
+                frame_to_inpaint_map[frame_no] = (coords[i], i)
 
         self.video_inpaint = VideoInpaint(config.PROPAINTER_MAX_LOAD_NUM)
         print('[Processing] start removing subtitles...')
-        
-        current_frame_no = 0
+
+        # Start reader and writer threads
+        reader = Thread(target=self._reader_thread)
+        writer = Thread(target=self._writer_thread, args=(tbar,))
+        reader.start()
+        writer.start()
+
+        frames_to_process = []
+        last_interval_idx = -1
+
         while True:
-            ret, frame = self.video_cap.read()
-            if not ret:
+            item = self.read_queue.get()
+            if item is None:
                 break
-            current_frame_no += 1
+            
+            frame_no, frame = item
 
-            if current_frame_no not in start_end_coord_map.keys():
-                self.video_writer.write(frame)
-                self.update_progress(tbar, 1)
+            if frame_no in frame_to_inpaint_map:
+                coord, interval_idx = frame_to_inpaint_map[frame_no]
+
+                # If we are in a new interval, process the previous one
+                if last_interval_idx != -1 and interval_idx != last_interval_idx:
+                    self._process_propainter_batch(frames_to_process, last_interval_idx)
+                    frames_to_process = []
+                
+                frames_to_process.append(frame)
+                last_interval_idx = interval_idx
             else:
-                start_frame_no = current_frame_no
-                end_frame_no, coord = start_end_coord_map[start_frame_no]
-                xmin, xmax, ymin, ymax = coord
-                print(f'Processing frames {start_frame_no} to {end_frame_no} with mask {(xmin, xmax, ymin, ymax)}')
+                # If there are frames to process, process them
+                if frames_to_process:
+                    self._process_propainter_batch(frames_to_process, last_interval_idx)
+                    frames_to_process = []
                 
-                mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
-                mask = create_mask(self.mask_size, mask_area_coordinates)
-                
-                frames_need_inpaint = [frame]
-                for _ in range(end_frame_no - start_frame_no):
-                    ret, frame = self.video_cap.read()
-                    if not ret:
-                        break
-                    current_frame_no += 1
-                    frames_need_inpaint.append(frame)
+                # Write non-subtitle frame
+                self.write_queue.put((frame_no, frame))
 
-                if frames_need_inpaint:
-                    # Process frames in batches using VideoInpaint
-                    for batch in batch_generator(frames_need_inpaint, config.PROPAINTER_MAX_LOAD_NUM):
-                        if len(batch) == 1:
-                            single_mask = create_mask(self.mask_size, mask_area_coordinates)
-                            if self.lama_inpaint is None:
-                                self.lama_inpaint = LamaInpaint()
-                            inpainted_frame = self.lama_inpaint(batch[0], single_mask)
-                            self.video_writer.write(inpainted_frame)
-                        else:
-                            inpainted_frames = self.video_inpaint.inpaint(batch, mask)
-                            for j, inpainted_frame in enumerate(inpainted_frames):
-                                self.video_writer.write(inpainted_frame)
-                                if self.gui_mode:
-                                    self.preview_frame = cv2.hconcat([batch[j], inpainted_frame])
-                        self.update_progress(tbar, len(batch))
+        # Process any remaining frames
+        if frames_to_process:
+            self._process_propainter_batch(frames_to_process, last_interval_idx)
+
+        # Signal writer thread to finish
+        self.write_queue.put(None)
+        
+        # Wait for threads to complete
+        reader.join()
+        writer.join()
+
+    def _process_propainter_batch(self, frames, interval_idx):
+        """Helper to process a batch of frames with ProPainter."""
+        if not frames:
+            return
+            
+        print(f"[DEBUG] Processing batch of {len(frames)} frames for interval {interval_idx}")
+        
+        # Create mask from the coordinates of the current interval
+        xmin, xmax, ymin, ymax = self.distinct_coords[interval_idx]
+        mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
+        mask = create_mask(self.mask_size, mask_area_coordinates)
+
+        for batch in batch_generator(frames, config.PROPAINTER_MAX_LOAD_NUM):
+            if len(batch) == 1:
+                if self.lama_inpaint is None:
+                    self.lama_inpaint = LamaInpaint()
+                inpainted_frame = self.lama_inpaint(batch[0], mask)
+                self.write_queue.put((-1, inpainted_frame)) # Frame number is not critical here
+            else:
+                inpainted_frames = self.video_inpaint.inpaint(batch, mask)
+                for i, inpainted_frame in enumerate(inpainted_frames):
+                    self.write_queue.put((-1, inpainted_frame))
+                    if self.gui_mode:
+                        self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
 
     def sttn_mode_with_no_detection(self, tbar):
         """
@@ -968,32 +1026,28 @@ class SubtitleRemover:
                 end_frame_no, coord = start_end_coord_map[start_frame_no]
                 mask = create_mask(self.mask_size, [coord])
 
-                # Inpaint first frame of interval
-                original_frame = frame.copy()
-                if config.LAMA_SUPER_FAST:
-                    inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
-                else:
-                    inpainted_frame = self.lama_inpaint(frame, mask)
-                if self.gui_mode:
-                    self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
-                self.video_writer.write(inpainted_frame)
-                self.update_progress(tbar, 1)
-
-                # Inpaint remaining frames of interval
+                # Collect frames for the interval
+                frames_to_inpaint = [frame]
                 for _ in range(end_frame_no - start_frame_no):
                     ret, frame = self.video_cap.read()
                     if not ret:
                         break
                     current_frame_no += 1
-                    original_frame = frame.copy()
+                    frames_to_inpaint.append(frame)
+
+                # Batch process the frames
+                for batch in batch_generator(frames_to_inpaint, 50):
                     if config.LAMA_SUPER_FAST:
-                        inpainted_frame = cv2.inpaint(frame, mask, 3, cv2.INPAINT_TELEA)
+                        inpainted_frames = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in batch]
                     else:
-                        inpainted_frame = self.lama_inpaint(frame, mask)
-                    if self.gui_mode:
-                        self.preview_frame = cv2.hconcat([original_frame, inpainted_frame])
-                    self.video_writer.write(inpainted_frame)
-                    self.update_progress(tbar, 1)
+                        inpainted_frames = self.lama_inpaint.inpaint_batch(batch, mask)
+
+                    for i, inpainted_frame in enumerate(inpainted_frames):
+                        if self.gui_mode:
+                            self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
+                        self.video_writer.write(inpainted_frame)
+                    
+                    self.update_progress(tbar, len(batch))
 
     def run(self):
         # 记录开始时间

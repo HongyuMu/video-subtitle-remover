@@ -249,7 +249,7 @@ MODE可选算法类型
 - InpaintMode.PROPAINTER 算法： 需要消耗大量显存，速度较慢，对运动非常剧烈的视频效果较好
 """
 # 【设置inpaint算法】
-MODE = InpaintMode.LAMA
+MODE = InpaintMode.PROPAINTER
 
 # ×××××××××× OCR Settings start ××××××××××
 # For each image, recognize text in up to 6 text boxes simultaneously. The larger the GPU memory, the larger this value can be set.
