@@ -22,3 +22,4 @@ paddle2onnx==1.3.1
 onnxruntime-gpu==1.20.1
 onnxruntime-directml==1.20.1;  sys_platform == 'win32'
 python-Levenshtein==0.21.1
+pynvml==11.5.0
