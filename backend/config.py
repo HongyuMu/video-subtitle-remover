@@ -317,7 +317,7 @@ if STTN_MAX_LOAD_NUM < STTN_REFERENCE_LENGTH * STTN_NEIGHBOR_STRIDE:
 # 【根据自己的GPU显存大小设置】最大同时处理的图片数量，设置越大处理效果越好，但是要求显存越高
 # 1280x720p视频设置80需要25G显存，设置50需要19G显存
 # 720x480p视频设置80需要8G显存，设置50需要7G显存
-PROPAINTER_MAX_LOAD_NUM = 70
+PROPAINTER_MAX_LOAD_NUM = 50
 # ×××××××××× InpaintMode.PROPAINTER算法设置 end ××××××××××
 
 # ×××××××××× InpaintMode.LAMA算法设置 start ××××××××××
