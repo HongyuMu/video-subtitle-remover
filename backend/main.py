@@ -36,20 +36,6 @@ from backend.models import ModelManager
 import queue
 from threading import Thread
 
-def get_gpu_memory_usage():
-    """Returns the GPU memory usage in a formatted string."""
-    if not torch.cuda.is_available():
-        return "CUDA is not available."
-    
-    allocated = torch.cuda.memory_allocated() / 1024**3
-    reserved = torch.cuda.memory_reserved() / 1024**3
-    total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-    free = total - allocated
-    
-    return (f"Allocated: {allocated:.2f} GiB, "
-            f"Reserved: {reserved:.2f} GiB, "
-            f"Free: {free:.2f} GiB, "
-            f"Total: {total:.2f} GiB")
 
 class SubtitleDetect:
     """
@@ -681,14 +667,6 @@ class SubtitleRemover:
         self.read_queue = queue.Queue(maxsize=100)
         self.write_queue = queue.Queue(maxsize=100)
 
-        # Print GPU info at initialization
-        if torch.cuda.is_available():
-            print(f"Detected {torch.cuda.device_count()} CUDA-enabled GPU(s).")
-            print(f"Using GPU: {torch.cuda.get_device_name(0)}")
-            print(f"Initial GPU Memory: {get_gpu_memory_usage()}")
-        else:
-            print("CUDA not available. Running on CPU.")
-
         # 总处理进度
         self.progress_total = 0
         self.progress_remover = 0
@@ -910,7 +888,6 @@ class SubtitleRemover:
             return
             
         print(f"[DEBUG] Processing batch of {len(frames)} frames for interval {interval_idx}")
-        print(f"[DEBUG] GPU Memory before processing: {get_gpu_memory_usage()}")
         
         # Create mask from the coordinates of the current interval
         xmin, xmax, ymin, ymax = self.distinct_coords[interval_idx]
@@ -929,8 +906,6 @@ class SubtitleRemover:
                     self.write_queue.put((-1, inpainted_frame))
                     if self.gui_mode:
                         self.preview_frame = cv2.hconcat([batch[i], inpainted_frame])
-        
-        print(f"[DEBUG] GPU Memory after processing: {get_gpu_memory_usage()}")
 
     def sttn_mode_with_no_detection(self, tbar):
         """
@@ -1246,37 +1221,12 @@ class SubtitleExtractor:
         if raw_subtitle_path and os.path.exists(raw_subtitle_path):
             self.raw_subtitle_path = raw_subtitle_path
         else:
-            print("No subtitle path provided, perform OCR in batches")
             self.raw_subtitle_path = self._extract_subtitles_with_area_detection(status_path=status_path)
-
-    def _ocr_reader_thread(self, frames_to_scan_set, crop_box):
-        """Dedicated reader thread for OCR processing."""
-        print("[DEBUG] Reader thread started.")
-        video_cap = cv2.VideoCapture(self.video_path)
-        crop_xmin, crop_ymin, crop_xmax, crop_ymax = crop_box
-
-        frames_found = 0
-        for frame_no in range(1, self.frame_count + 1):
-            ret, frame = video_cap.read()
-            if not ret:
-                print("[DEBUG] Reader thread: End of video file reached.")
-                break
-            if frame_no in frames_to_scan_set:
-                cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-                if cropped_frame.size > 0:
-                    # Pass dict for clarity
-                    self.read_queue.put({'frame_no': frame_no, 'frame': cropped_frame, 'crop_box': (crop_xmin, crop_ymin)})
-                    frames_found += 1
-        
-        print(f"[DEBUG] Reader thread finished reading. Found and queued {frames_found} frames.")
-        self.read_queue.put(None) # Sentinel
-        print("[DEBUG] Reader thread: Sentinel value (None) placed in queue.")
-        video_cap.release()
-        print("[DEBUG] Reader thread exiting.")
 
     def _extract_subtitles_with_area_detection(self, status_path: str = None):
         """
         Detects subtitle areas first, then performs OCR only on those areas.
+        This is a more robust way to extract subtitles.
         """
         if not self.detected_areas and not self.universal_box:
             return "" # No subtitles to process
@@ -1303,71 +1253,44 @@ class SubtitleExtractor:
 
         text_recogniser = get_ocr_recogniser()
         temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
-        
-        frames_to_scan_set = set(frames_to_scan)
-        batch_size = config.MAX_BATCH_SIZE
+        video_cap = cv2.VideoCapture(self.video_path)
 
         xmin, xmax, ymin, ymax = universal_box
         padding = 10
-        crop_box = (
-            max(0, xmin - padding),
-            max(0, ymin - padding),
-            min(self.frame_width, xmax + padding),
-            min(self.frame_height, ymax + padding)
-        )
-        
-        # Start reader thread
-        self.read_queue = queue.Queue(maxsize=batch_size * 2)
-        reader = Thread(target=self._ocr_reader_thread, args=(frames_to_scan_set, crop_box))
-        reader.start()
+        crop_xmin = max(0, xmin - padding)
+        crop_ymin = max(0, ymin - padding)
+        crop_xmax = min(self.frame_width, xmax + padding)
+        crop_ymax = min(self.frame_height, ymax + padding)
 
-        total_frames_to_ocr = len(frames_to_scan_set)
+        total_frames_to_ocr = len(frames_to_scan)
         processed_frames = 0
-        
-        pbar = tqdm(total=total_frames_to_ocr, desc="OCR on Universal Region")
 
-        print("[DEBUG] Main thread: Starting to consume from queue.")
-        while True:
-            frames_batch = []
-            frame_nos_batch = []
-            crop_boxes_batch = []
+        for frame_no in tqdm(frames_to_scan, desc="OCR on Universal Region"):
+            # Frame numbers from detection are 1-based, need to seek to 0-based index
+            video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
+            ret, frame = video_cap.read()
+            if not ret:
+                processed_frames += 1
+                continue
             
-            # Collect a batch of frames
-            for _ in range(batch_size):
-                print(f"[DEBUG] Main thread: Waiting for item from queue... (Queue size: {self.read_queue.qsize()})")
-                item = self.read_queue.get()
-                if item is None:
-                    print("[DEBUG] No items in the queue, breaking")
-                    break
-                print(f"[DEBUG] Main thread: Got frame {item['frame_no']} from queue.")
-                frames_batch.append(item['frame'])
-                frame_nos_batch.append(item['frame_no'])
-                crop_boxes_batch.append(item['crop_box'])
+            cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
 
-            if not frames_batch:
-                print("[DEBUG] Main thread: Batch is empty, exiting loop.")
-                break # End of processing
-                
-            print(f"[DEBUG] Main thread: Collected a batch of {len(frames_batch)} frames. Preparing to call predict_batch.")
-            batch_results = text_recogniser.predict_batch(frames_batch)
-            print(f"[DEBUG] Main thread: predict_batch call finished. Received {len(batch_results)} results.")
+            if cropped_frame.size == 0:
+                processed_frames += 1
+                continue
+            
+            dt_box, rec_res = text_recogniser.predict(cropped_frame)
 
-            for i, (dt_box, rec_res) in enumerate(batch_results):
-                batch_frame_no = frame_nos_batch[i]
-                crop_xmin_val, crop_ymin_val = crop_boxes_batch[i]
+            if rec_res:
+                recognized_coordinates = get_coordinates(dt_box)
+                for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
+                    full_frame_coords = (
+                        b_xmin + crop_xmin, b_xmax + crop_xmin,
+                        b_ymin + crop_ymin, b_ymax + crop_ymin
+                    )
+                    temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
 
-                if rec_res:
-                    recognized_coordinates = get_coordinates(dt_box)
-                    for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
-                        full_frame_coords = (
-                            b_xmin + crop_xmin_val, b_xmax + crop_xmin_val,
-                            b_ymin + crop_ymin_val, b_ymax + crop_ymin_val
-                        )
-                        temp_raw_subtitle_file.write(f'{str(batch_frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
-
-            processed_frames += len(frames_batch)
-            pbar.update(len(frames_batch))
-
+            processed_frames += 1
             if status_path and total_frames_to_ocr > 0:
                 try:
                     percent = int((processed_frames / total_frames_to_ocr) * 100)
@@ -1375,11 +1298,8 @@ class SubtitleExtractor:
                         json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
                 except Exception:
                     pass
-        
-        print("[DEBUG] Main thread: OCR loop finished.")
-        reader.join()
-        print("[DEBUG] Main thread: Reader thread joined.")
-        pbar.close()
+
+        video_cap.release()
         temp_raw_subtitle_file.close()
         return temp_raw_subtitle_file.name
 

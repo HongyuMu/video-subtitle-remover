@@ -11,19 +11,84 @@ import onnxruntime as ort
 import paddle
 import configparser
 from pathlib import Path
+import pynvml
+
+def get_best_gpu():
+    """Selects the GPU with the most free memory. Returns GPU index or None."""
+    if pynvml is None:
+        print("pynvml module not found, cannot select best GPU.")
+        return 0 # Fallback to GPU 0 if pynvml not installed
+    try:
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+        if device_count == 0:
+            return None
+
+        best_gpu_index = -1
+        max_free_memory = 0
+
+        for i in range(device_count):
+            handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+            mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            if mem_info.free > max_free_memory:
+                max_free_memory = mem_info.free
+                best_gpu_index = i
+        
+        pynvml.nvmlShutdown()
+
+        if best_gpu_index != -1:
+            return best_gpu_index
+            
+    except pynvml.NVMLError:
+        print("NVIDIA driver not found, cannot select best GPU.")
+        return 0 # Fallback to GPU 0
+    except Exception as e:
+        print(f"An error occurred during GPU selection: {e}")
+        return 0 # Fallback to GPU 0
+    return None
 
 # 项目版本号
 VERSION = "1.1.1"
 # ×××××××××××××××××××× [不要改] start ××××××××××××××××××××
 logging.disable(logging.DEBUG)  # 关闭DEBUG日志的打印
 logging.disable(logging.WARNING)  # 关闭WARNING日志的打印
+
+USE_DML = False
+device = None
+
 try:
     import torch_directml
-    device = torch_directml.device(torch_directml.default_device())
-    USE_DML = True
-except:
+    if torch_directml.is_available():
+        device = torch_directml.device()
+        USE_DML = True
+        print("Using DirectML device.")
+    else:
+        raise ImportError
+except (ImportError, Exception):
     USE_DML = False
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        best_gpu_id = get_best_gpu()
+        if best_gpu_id is not None:
+            device = torch.device(f"cuda:{best_gpu_id}")
+            torch.cuda.set_device(device)
+            if paddle.is_compiled_with_cuda():
+                paddle.set_device(f'gpu:{best_gpu_id}')
+            print(f"Using best available GPU: cuda:{best_gpu_id}")
+        else:
+            device = torch.device("cuda:0")
+            if paddle.is_compiled_with_cuda():
+                paddle.set_device('gpu:0')
+            print("No available GPU found, fallback to cuda:0")
+    else:
+        device = torch.device("cpu")
+        print("Using CPU.")
+
+if device is None:
+    device = torch.device("cpu")
+    print("Device selection failed, defaulting to CPU.")
+
+USE_GPU = (device.type != 'cpu') or USE_DML
+
 BASE_DIR = str(Path(os.path.abspath(__file__)).parent)
 LAMA_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'big-lama')
 STTN_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'sttn', 'infer_model.pth')
@@ -57,14 +122,6 @@ INTERFACE_KEY_NAME_MAP = {
 interface_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'interface',
                               f"{INTERFACE_KEY_NAME_MAP[settings_config['DEFAULT']['Interface']]}.ini")
 interface_config.read(interface_file, encoding='utf-8')
-
-USE_GPU = False
-# 如果paddlepaddle编译了gpu的版本
-if paddle.is_compiled_with_cuda():
-    # 查看是否有可用的gpu
-    if len(paddle.static.cuda_places()) > 0:
-        # 如果有GPU则使用GPU
-        USE_GPU = True
 
 # 指定ffmpeg可执行程序路径
 sys_str = platform.system()
