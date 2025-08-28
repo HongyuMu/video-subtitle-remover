@@ -20,7 +20,6 @@ def get_ocr_recogniser():
 class OcrRecogniser:
     def __init__(self):
         # 获取参数对象
-        importlib.reload(config)
         self.recogniser = self.init_model()
 
     @staticmethod
@@ -44,6 +43,41 @@ class OcrRecogniser:
             return detection_box, recognise_result
         else:
             return [], []
+
+    def predict_batch(self, images):
+        """
+        Performs OCR on a batch of images by separating detection and recognition.
+        """
+        if not images:
+            return []
+
+        # 1. Batch Detection
+        all_dt_boxes, _ = self.recogniser.text_detector(images)
+
+        batch_results = []
+        for i, dt_boxes in enumerate(all_dt_boxes):
+            if dt_boxes is None or len(dt_boxes) == 0:
+                batch_results.append(([], []))
+                continue
+            
+            # 2. Prepare images for recognition based on detected boxes
+            img = images[i]
+            img_crop_list = []
+            
+            for box in dt_boxes:
+                img_crop = self.recogniser.get_rotate_crop_image(img, box)
+                img_crop_list.append(img_crop)
+
+            # 3. Batch Recognition on the crops
+            if not img_crop_list:
+                batch_results.append((dt_boxes.tolist(), []))
+                continue
+
+            rec_res, _ = self.recogniser.text_recognizer(img_crop_list)
+            
+            batch_results.append((dt_boxes.tolist(), rec_res))
+
+        return batch_results
 
     def init_model(self):
         # Increase GPU memory allocation for better performance with larger batches and high-res video.
