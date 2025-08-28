@@ -57,7 +57,8 @@ class OcrRecogniser:
             return []
 
         # Increase batch size for GPU processing
-        effective_batch_size = min(len(images), config.MAX_BATCH_SIZE * 2 if config.USE_GPU else config.MAX_BATCH_SIZE)
+        ocr_use_gpu = getattr(config, 'OCR_USE_GPU', False)
+        effective_batch_size = min(len(images), config.MAX_BATCH_SIZE * 2 if ocr_use_gpu else config.MAX_BATCH_SIZE)
         
         # Process images in optimized batches
         batch_results = []
@@ -86,7 +87,7 @@ class OcrRecogniser:
                     continue
 
                 # Process recognition in larger batches for GPU efficiency
-                rec_batch_size = config.REC_BATCH_NUM * 2 if config.USE_GPU else config.REC_BATCH_NUM
+                rec_batch_size = config.REC_BATCH_NUM * 2 if ocr_use_gpu else config.REC_BATCH_NUM
                 all_rec_res = []
                 
                 for k in range(0, len(img_crop_list), rec_batch_size):
@@ -108,7 +109,8 @@ class OcrRecogniser:
         
         if max_workers is None:
             # Use 2-4 workers for GPU to avoid memory conflicts, more for CPU
-            max_workers = 2 if config.USE_GPU else min(4, len(frames))
+            ocr_use_gpu = getattr(config, 'OCR_USE_GPU', False)
+            max_workers = 2 if ocr_use_gpu else min(4, len(frames))
         
         # Split frames into chunks for parallel processing
         chunk_size = max(1, len(frames) // max_workers)
@@ -161,18 +163,15 @@ class OcrRecogniser:
         except ImportError:
             use_onnx_runtime = False
 
-        # Force GPU usage and set GPU device if available
-        use_gpu = config.USE_GPU
-        if use_gpu and hasattr(config, 'device') and config.device.type == 'cuda':
-            import paddle
-            # Set Paddle device to match the selected GPU
-            gpu_id = config.device.index if config.device.index is not None else 0
-            paddle.set_device(f'gpu:{gpu_id}')
-            print(f"OCR using GPU: {gpu_id}")
-        elif use_gpu:
-            print("OCR using default GPU")
+        # Use OCR-specific GPU availability flag from config
+        use_gpu = getattr(config, 'OCR_USE_GPU', False)
+        
+        if use_gpu:
+            # The device is set globally in config.py, so we just log it here
+            gpu_id = config.device.index if hasattr(config, 'device') and config.device.type == 'cuda' and config.device.index is not None else 0
+            print(f"OCR using GPU: {gpu_id} (device configured globally)")
         else:
-            print("OCR using CPU")
+            print("OCR using CPU (PaddlePaddle not compiled with CUDA or GPU unavailable)")
 
         return PaddleOCR(use_gpu=use_gpu,
                          gpu_mem=gpu_mem,
