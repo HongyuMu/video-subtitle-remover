@@ -170,8 +170,7 @@ async def upload_and_edit(
     request: Request,
     file: Optional[UploadFile] = File(None),
     url: Optional[str] = Form(None),
-    cloud_ref: Optional[str] = Form(None)
-):
+    cloud_ref: Optional[str] = Form(None)):
     """
     Accepts a video, prepares it for editing, and redirects to the editor page.
     Subtitle detection is skipped and will be triggered by the user from the editor.
@@ -382,8 +381,7 @@ def generate_subtitle_task(
     txt_path: str, 
     status_path: str, 
     detected_areas: dict,
-    universal_box: Optional[UniversalBoundingBox] = None
-):
+    universal_box: Optional[UniversalBoundingBox] = None):
     """
     Background task to perform subtitle extraction and generate SRT and TXT files.
     """
@@ -488,8 +486,7 @@ def generate_subtitle_task(
 async def generate_subtitle_text(
     task_id: str,
     background_tasks: BackgroundTasks,
-    universal_box: Optional[UniversalBoundingBox] = None
-):
+    universal_box: Optional[UniversalBoundingBox] = None):
     """
     Generates a downloadable TXT file with subtitle content.
     This is now an async operation. Poll /task_info/{task_id} for status.
