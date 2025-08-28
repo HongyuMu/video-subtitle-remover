@@ -75,45 +75,71 @@ class SubtitleDetect:
 
     def find_subtitle_frame_no(self, sub_remover=None, status_file_path: str = None):
         video_cap = cv2.VideoCapture(self.video_path)
-        frame_count = video_cap.get(cv2.CAP_PROP_FRAME_COUNT)
-        tbar = tqdm(total=int(frame_count), unit='frame', position=0, file=sys.__stdout__, desc='Subtitle Finding')
-        current_frame_no = 0
+        frame_count = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        tbar = tqdm(total=frame_count, unit='frame', position=0, file=sys.__stdout__, desc='Subtitle Finding')
         subtitle_frame_no_box_dict = {}
         print('[Processing] start finding subtitles...')
+        
+        # Use batch processing for GPU acceleration
+        batch_size = config.MAX_BATCH_SIZE if config.USE_GPU else 5
+        frame_batch = []
+        frame_numbers = []
+        current_frame_no = 0
+        
         while video_cap.isOpened():
             ret, frame = video_cap.read()
-            # 如果读取视频帧失败（视频读到最后一帧）
             if not ret:
                 break
-            # 读取视频帧成功
+                
             current_frame_no += 1
-            dt_boxes, elapse = self.detect_subtitle(frame)
-            coordinate_list = self.get_coordinates(dt_boxes.tolist())
-            if coordinate_list:
-                temp_list = []
-                for coordinate in coordinate_list:
-                    xmin, xmax, ymin, ymax = coordinate
-                    if self.sub_area is not None:
-                        s_ymin, s_ymax, s_xmin, s_xmax = self.sub_area
-                        if (s_xmin <= xmin and xmax <= s_xmax
-                                and s_ymin <= ymin
-                                and ymax <= s_ymax):
-                            temp_list.append((xmin, xmax, ymin, ymax))
-                    else:
-                        temp_list.append((xmin, xmax, ymin, ymax))
-                if len(temp_list) > 0:
-                    subtitle_frame_no_box_dict[current_frame_no] = temp_list
-            tbar.update(1)
-            # write progress to status file for frontend polling
-            if status_file_path:
-                try:
-                    progress_pct = int((current_frame_no / frame_count) * 100)
-                    with open(status_file_path, 'w') as f:
-                        json.dump({"status": "Generating Subtitles...", "stage": "Detecting", "progress": progress_pct}, f)
-                except Exception:
-                    pass
-            if sub_remover:
-                sub_remover.progress_total = (100 * float(current_frame_no) / float(frame_count)) // 2
+            frame_batch.append(frame)
+            frame_numbers.append(current_frame_no)
+            
+            # Process batch when full or at end of video
+            if len(frame_batch) >= batch_size or current_frame_no == frame_count:
+                # Batch detection for GPU efficiency
+                batch_results = []
+                for frame in frame_batch:
+                    dt_boxes, elapse = self.detect_subtitle(frame)
+                    coordinate_list = self.get_coordinates(dt_boxes.tolist())
+                    batch_results.append(coordinate_list)
+                
+                # Process batch results
+                for i, coordinate_list in enumerate(batch_results):
+                    frame_no = frame_numbers[i]
+                    if coordinate_list:
+                        temp_list = []
+                        for coordinate in coordinate_list:
+                            xmin, xmax, ymin, ymax = coordinate
+                            if self.sub_area is not None:
+                                s_ymin, s_ymax, s_xmin, s_xmax = self.sub_area
+                                if (s_xmin <= xmin and xmax <= s_xmax
+                                        and s_ymin <= ymin
+                                        and ymax <= s_ymax):
+                                    temp_list.append((xmin, xmax, ymin, ymax))
+                            else:
+                                temp_list.append((xmin, xmax, ymin, ymax))
+                        if len(temp_list) > 0:
+                            subtitle_frame_no_box_dict[frame_no] = temp_list
+                
+                # Update progress
+                tbar.update(len(frame_batch))
+                
+                # write progress to status file for frontend polling
+                if status_file_path:
+                    try:
+                        progress_pct = int((current_frame_no / frame_count) * 100)
+                        with open(status_file_path, 'w') as f:
+                            json.dump({"status": "Generating Subtitles...", "stage": "Detecting", "progress": progress_pct}, f)
+                    except Exception:
+                        pass
+                        
+                if sub_remover:
+                    sub_remover.progress_total = (100 * float(current_frame_no) / float(frame_count)) // 2
+                
+                # Clear batch
+                frame_batch = []
+                frame_numbers = []
         subtitle_frame_no_box_dict = self.unify_regions(subtitle_frame_no_box_dict)
         # if config.UNITE_COORDINATES:
         #     subtitle_frame_no_box_dict = self.get_subtitle_frame_no_box_dict_with_united_coordinates(subtitle_frame_no_box_dict)
@@ -1265,32 +1291,49 @@ class SubtitleExtractor:
         total_frames_to_ocr = len(frames_to_scan)
         processed_frames = 0
 
-        for frame_no in tqdm(frames_to_scan, desc="OCR on Universal Region"):
-            # Frame numbers from detection are 1-based, need to seek to 0-based index
-            video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
-            ret, frame = video_cap.read()
-            if not ret:
-                processed_frames += 1
-                continue
+        # Process frames in batches for better GPU utilization
+        batch_size = config.MAX_BATCH_SIZE if config.USE_GPU else 10
+        frames_list = list(frames_to_scan)
+        
+        for batch_start in tqdm(range(0, len(frames_list), batch_size), desc="OCR Processing Batches"):
+            batch_frames = frames_list[batch_start:batch_start + batch_size]
+            batch_images = []
+            batch_frame_numbers = []
             
-            cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-
-            if cropped_frame.size == 0:
-                processed_frames += 1
-                continue
+            # Load batch of frames
+            for frame_no in batch_frames:
+                video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
+                ret, frame = video_cap.read()
+                if not ret:
+                    continue
+                    
+                cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
+                if cropped_frame.size == 0:
+                    continue
+                    
+                batch_images.append(cropped_frame)
+                batch_frame_numbers.append(frame_no)
             
-            dt_box, rec_res = text_recogniser.predict(cropped_frame)
+            if batch_images:
+                # Use parallel processing for OCR if available
+                if hasattr(text_recogniser, 'predict_parallel_frames') and len(batch_images) > 4:
+                    batch_results = text_recogniser.predict_parallel_frames(batch_images)
+                else:
+                    batch_results = text_recogniser.predict_batch(batch_images)
+                
+                # Process results
+                for i, (dt_box, rec_res) in enumerate(batch_results):
+                    if rec_res and i < len(batch_frame_numbers):
+                        frame_no = batch_frame_numbers[i]
+                        recognized_coordinates = get_coordinates(dt_box)
+                        for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
+                            full_frame_coords = (
+                                b_xmin + crop_xmin, b_xmax + crop_xmin,
+                                b_ymin + crop_ymin, b_ymax + crop_ymin
+                            )
+                            temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
 
-            if rec_res:
-                recognized_coordinates = get_coordinates(dt_box)
-                for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
-                    full_frame_coords = (
-                        b_xmin + crop_xmin, b_xmax + crop_xmin,
-                        b_ymin + crop_ymin, b_ymax + crop_ymin
-                    )
-                    temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
-
-            processed_frames += 1
+            processed_frames += len(batch_frames)
             if status_path and total_frames_to_ocr > 0:
                 try:
                     percent = int((processed_frames / total_frames_to_ocr) * 100)

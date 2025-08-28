@@ -73,7 +73,6 @@ except (ImportError, Exception):
             torch.cuda.set_device(device)
             if paddle.is_compiled_with_cuda():
                 paddle.set_device(f'gpu:{best_gpu_id}')
-            print(f"Using best available GPU: cuda:{best_gpu_id}")
         else:
             device = torch.device("cuda:0")
             if paddle.is_compiled_with_cuda():
@@ -82,6 +81,7 @@ except (ImportError, Exception):
     else:
         device = torch.device("cpu")
         print("Using CPU.")
+    print(f"Using best available GPU: {device}")
 
 if device is None:
     device = torch.device("cpu")
@@ -309,10 +309,12 @@ MODE可选算法类型
 MODE = InpaintMode.PROPAINTER
 
 # ×××××××××× OCR Settings start ××××××××××
+# GPU memory limit in MB for OCR processing
+GPU_MEMORY_LIMIT = 4096 if USE_GPU else 2048
 # For each image, recognize text in up to 6 text boxes simultaneously. The larger the GPU memory, the larger this value can be set.
-REC_BATCH_NUM = 6
+REC_BATCH_NUM = 12 if USE_GPU else 6
 # How many images are recognized in each batch of the DB algorithm, the default is 10
-MAX_BATCH_SIZE = 10
+MAX_BATCH_SIZE = 20 if USE_GPU else 10
 # Confidence threshold for text detection. Lower values are less strict.
 DET_DB_BOX_THRESH = 0.6
 # Do not accept subtitles with a confidence level lower than 0.75
