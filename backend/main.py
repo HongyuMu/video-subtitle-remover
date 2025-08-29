@@ -35,6 +35,7 @@ from tqdm import tqdm
 from backend.models import ModelManager
 import queue
 from threading import Thread
+from backend.inpaint.video_inpaint import inpaint_worker
 
 
 class SubtitleDetect:
@@ -850,6 +851,111 @@ class SubtitleRemover:
 
     def propainter_mode(self, tbar):
         print('use propainter mode')
+        
+        # Check if multiple GPUs are available
+        if len(config.DEVICES) > 1 and config.USE_GPU:
+            self.propainter_mode_multi_gpu(tbar)
+        else:
+            self.propainter_mode_single_gpu(tbar)
+
+    def propainter_mode_multi_gpu(self, tbar):
+        print(f"Using {len(config.DEVICES)} GPUs for parallel processing.")
+        
+        # Set start method to 'spawn' for CUDA safety in multiprocessing
+        try:
+            multiprocessing.set_start_method("spawn", force=True)
+        except RuntimeError:
+            # The context can only be set once. This is to prevent errors
+            # if this function is called multiple times.
+            pass
+            
+        manager = multiprocessing.Manager()
+        task_queue = manager.Queue()
+        result_queue = manager.Queue()
+
+        # Group frames by interval
+        intervals = self.frame_intervals
+        coords = self.distinct_coords
+        
+        frames_by_interval = {i: [] for i in range(len(intervals))}
+        original_frames_map = {}
+        
+        current_frame_no = 0
+        while True:
+            ret, frame = self.video_cap.read()
+            if not ret:
+                break
+            current_frame_no += 1
+            original_frames_map[current_frame_no] = frame
+            
+            for i, (start, end) in enumerate(intervals):
+                if start <= current_frame_no <= end:
+                    frames_by_interval[i].append((current_frame_no, frame))
+                    break
+        
+        self.video_cap.release() # Release cap after reading all frames
+
+        # Create and enqueue tasks
+        total_inpaint_frames = 0
+        for i, (start, end) in enumerate(intervals):
+            frames_to_process = [f for _, f in frames_by_interval[i]]
+            if not frames_to_process:
+                continue
+            
+            total_inpaint_frames += len(frames_to_process)
+            xmin, xmax, ymin, ymax = coords[i]
+            mask = create_mask(self.mask_size, [(xmin, xmax, ymin, ymax)])
+            task_queue.put((i, frames_to_process, mask))
+        
+                 # Start worker processes
+        num_workers = len(config.DEVICES)
+        workers = []
+        for i in range(num_workers):
+            gpu_id = config.DEVICES[i].index
+            worker_process = multiprocessing.Process(
+                target=inpaint_worker,
+                args=(task_queue, result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
+            )
+            workers.append(worker_process)
+            worker_process.start()
+         
+        # Send sentinels to signal workers to stop
+        for _ in range(num_workers):
+            task_queue.put(None)
+
+        # Collect results
+        self.set_stage('inpaint', total_inpaint_frames, tbar)
+        inpainted_results = {}
+        processed_frames_count = 0
+        for _ in range(len(intervals)):
+            if all(not w.is_alive() for w in workers) and result_queue.empty():
+                break
+            try:
+                interval_idx, inpainted_frames = result_queue.get(timeout=10)
+                
+                original_frame_nos = [no for no, _ in frames_by_interval[interval_idx]]
+                inpainted_results.update(zip(original_frame_nos, inpainted_frames))
+                
+                processed_frames_count += len(inpainted_frames)
+                self.update_progress(tbar, len(inpainted_frames))
+
+            except queue.Empty:
+                continue
+
+        for worker in workers:
+            worker.join(timeout=10)
+            if worker.is_alive():
+                worker.terminate()
+
+        # Write final video
+        self.set_stage('write', self.frame_count, tbar)
+        for frame_no in range(1, self.frame_count + 1):
+            frame_to_write = inpainted_results.get(frame_no, original_frames_map.get(frame_no))
+            if frame_to_write is not None:
+                self.video_writer.write(frame_to_write)
+            self.update_progress(tbar, 1)
+
+    def propainter_mode_single_gpu(self, tbar):
         intervals = self.frame_intervals
         coords = self.distinct_coords
 

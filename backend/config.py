@@ -16,39 +16,41 @@ import configparser
 from pathlib import Path
 import pynvml
 
-def get_best_gpu():
-    """Selects the GPU with the most free memory. Returns GPU index or None."""
+def get_available_gpus(min_free_memory_mb=1024):
+    """
+    Gets a list of available GPU indices, sorted by free memory.
+    Filters out GPUs with less than a specified amount of free VRAM.
+    """
     if pynvml is None:
-        print("pynvml module not found, cannot select best GPU.")
-        return 0 # Fallback to GPU 0 if pynvml not installed
+        print("pynvml module not found, cannot select GPUs.")
+        return []
     try:
         pynvml.nvmlInit()
         device_count = pynvml.nvmlDeviceGetCount()
         if device_count == 0:
-            return None
+            return []
 
-        best_gpu_index = -1
-        max_free_memory = 0
-
+        gpus = []
         for i in range(device_count):
             handle = pynvml.nvmlDeviceGetHandleByIndex(i)
             mem_info = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            if mem_info.free > max_free_memory:
-                max_free_memory = mem_info.free
-                best_gpu_index = i
+            free_memory_mb = mem_info.free / 1024**2
+            if free_memory_mb >= min_free_memory_mb:
+                gpus.append({'id': i, 'free_mem': free_memory_mb})
         
         pynvml.nvmlShutdown()
 
-        if best_gpu_index != -1:
-            return best_gpu_index
+        # Sort GPUs by free memory in descending order
+        sorted_gpus = sorted(gpus, key=lambda x: x['free_mem'], reverse=True)
+        
+        return [gpu['id'] for gpu in sorted_gpus]
             
     except pynvml.NVMLError:
-        print("NVIDIA driver not found, cannot select best GPU.")
-        return 0 # Fallback to GPU 0
+        print("NVIDIA driver not found, cannot select GPUs.")
+        return []
     except Exception as e:
         print(f"An error occurred during GPU selection: {e}")
-        return 0 # Fallback to GPU 0
-    return None
+        return []
 
 # 项目版本号
 VERSION = "1.1.1"
@@ -57,12 +59,14 @@ logging.disable(logging.DEBUG)  # 关闭DEBUG日志的打印
 logging.disable(logging.WARNING)  # 关闭WARNING日志的打印
 
 USE_DML = False
-device = None
+device = None # Primary device
+DEVICES = []  # List of all available CUDA devices for parallel processing
 
 try:
     import torch_directml
     if torch_directml.is_available():
         device = torch_directml.device()
+        DEVICES = [device]
         USE_DML = True
         print("Using DirectML device.")
     else:
@@ -71,38 +75,47 @@ except (ImportError, Exception):
     USE_DML = False
     PADDLE_USE_GPU = False # Flag specific for PaddleOCR
     if torch.cuda.is_available():
-        # Check for an already selected device to ensure consistency
-        selected_gpu_env = os.environ.get('SELECTED_CUDA_DEVICE')
-        if selected_gpu_env:
-            best_gpu_id = int(selected_gpu_env)
+        # Ensure GPU detection runs only once and is inherited by child processes
+        selected_gpus_env = os.environ.get('SELECTED_GPU_DEVICES')
+        if selected_gpus_env:
+            available_gpu_ids = [int(gid) for gid in selected_gpus_env.split(',')]
         else:
-            best_gpu_id = get_best_gpu()
-            if best_gpu_id is not None:
-                os.environ['SELECTED_CUDA_DEVICE'] = str(best_gpu_id)
-
-        if best_gpu_id is not None:
-            device = torch.device(f"cuda:{best_gpu_id}")
+            available_gpu_ids = get_available_gpus()
+            if available_gpu_ids:
+                os.environ['SELECTED_GPU_DEVICES'] = ",".join(map(str, available_gpu_ids))
+        
+        if available_gpu_ids:
+            # Set the primary device to the one with the most memory
+            primary_gpu_id = available_gpu_ids[0]
+            device = torch.device(f"cuda:{primary_gpu_id}")
             torch.cuda.set_device(device)
-            print(f"PyTorch is using GPU: {device} with type {device.type}")
+            
+            # Only print GPU info if this is the first time (not from child process)
+            if not selected_gpus_env:
+                print(f"PyTorch is using primary GPU: {device}")
+                # Populate the list of all available devices for workers
+                DEVICES = [torch.device(f"cuda:{gid}") for gid in available_gpu_ids]
+                print(f"Available worker GPUs for parallel processing: {[str(d) for d in DEVICES]}")
+            else:
+                DEVICES = [torch.device(f"cuda:{gid}") for gid in available_gpu_ids]
+
             if paddle.is_compiled_with_cuda():
                 try:
-                    paddle.set_device(f'gpu:{best_gpu_id}')
+                    paddle.set_device(f'gpu:{primary_gpu_id}')
                     PADDLE_USE_GPU = True
-                    print(f"PaddlePaddle is set to use GPU: gpu:{best_gpu_id}")
+                    if not selected_gpus_env:
+                        print(f"PaddlePaddle is set to use GPU: gpu:{primary_gpu_id}")
                 except Exception as e:
-                    print(f"PyTorch GPU available but PaddlePaddle GPU failed to initialize: {e}")
+                    if not selected_gpus_env:
+                        print(f"PyTorch GPU available but PaddlePaddle GPU failed to initialize: {e}")
             else:
-                 print("PaddlePaddle: CPU (not compiled with CUDA)")
+                if not selected_gpus_env:
+                    print("PaddlePaddle: CPU (not compiled with CUDA)")
         else:
-            # Fallback if no best GPU found but cuda is available
-            device = torch.device("cuda:0")
-            print("No specific best GPU found, falling back to cuda:0 for PyTorch.")
-            if paddle.is_compiled_with_cuda():
-                paddle.set_device('gpu:0')
-                PADDLE_USE_GPU = True
-                print("PaddlePaddle is set to use GPU: gpu:0")
-            else:
-                print("PaddlePaddle uses CPU")
+            device = torch.device("cpu")
+            if not selected_gpus_env:
+                print("No suitable GPUs found, falling back to CPU.")
+
     else:
         device = torch.device("cpu")
         print("Using CPU for all frameworks.")
