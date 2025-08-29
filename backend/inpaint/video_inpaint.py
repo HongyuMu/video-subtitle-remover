@@ -131,7 +131,14 @@ def get_ref_index(mid_neighbor_id, neighbor_ids, length, ref_stride=10, ref_num=
 
 class VideoInpaint:
     def __init__(self, sub_video_length=config.PROPAINTER_MAX_LOAD_NUM, use_fp16=True):
-        self.device = get_device()
+        # Explicitly use the GPU selected in config (falls back to CPU if not CUDA)
+        selected_gpu = None
+        try:
+            if isinstance(config.device, torch.device) and config.device.type == 'cuda':
+                selected_gpu = config.device.index if config.device.index is not None else 0
+        except Exception:
+            selected_gpu = None
+        self.device = get_device(gpu_id=selected_gpu)
         self.use_fp16 = use_fp16
         self.use_half = True if self.use_fp16 else False
         if self.device == torch.device('cpu'):

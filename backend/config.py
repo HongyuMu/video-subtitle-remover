@@ -2,7 +2,10 @@ import warnings
 from enum import Enum, unique
 warnings.filterwarnings('ignore')
 import os
+# Set PyTorch CUDA memory allocation configuration before importing torch
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import torch
+
 import logging
 import platform
 import stat
@@ -66,47 +69,54 @@ try:
         raise ImportError
 except (ImportError, Exception):
     USE_DML = False
-    PADDLE_GPU_AVAILABLE = False  # Default to False
+    PADDLE_USE_GPU = False # Flag specific for PaddleOCR
     if torch.cuda.is_available():
-        best_gpu_id = get_best_gpu()
+        # Check for an already selected device to ensure consistency
+        selected_gpu_env = os.environ.get('SELECTED_CUDA_DEVICE')
+        if selected_gpu_env:
+            best_gpu_id = int(selected_gpu_env)
+        else:
+            best_gpu_id = get_best_gpu()
+            if best_gpu_id is not None:
+                os.environ['SELECTED_CUDA_DEVICE'] = str(best_gpu_id)
+
         if best_gpu_id is not None:
             device = torch.device(f"cuda:{best_gpu_id}")
             torch.cuda.set_device(device)
-            # Check if PaddlePaddle supports CUDA before setting device
+            print(f"PyTorch is using GPU: {device} with type {device.type}")
             if paddle.is_compiled_with_cuda():
                 try:
                     paddle.set_device(f'gpu:{best_gpu_id}')
-                    PADDLE_GPU_AVAILABLE = True
-                    print(f"Using PyTorch GPU: {device}, PaddlePaddle GPU: gpu:{best_gpu_id}")
+                    PADDLE_USE_GPU = True
+                    print(f"PaddlePaddle is set to use GPU: gpu:{best_gpu_id}")
                 except Exception as e:
-                    print(f"PyTorch GPU available but PaddlePaddle GPU failed: {e}")
+                    print(f"PyTorch GPU available but PaddlePaddle GPU failed to initialize: {e}")
             else:
-                print(f"Using PyTorch GPU: {device}, PaddlePaddle: CPU (not compiled with CUDA)")
+                 print("PaddlePaddle: CPU (not compiled with CUDA)")
         else:
+            # Fallback if no best GPU found but cuda is available
             device = torch.device("cuda:0")
+            print("No specific best GPU found, falling back to cuda:0 for PyTorch.")
             if paddle.is_compiled_with_cuda():
-                try:
-                    paddle.set_device('gpu:0')
-                    PADDLE_GPU_AVAILABLE = True
-                    print("Using fallback GPU: cuda:0")
-                except Exception as e:
-                    print(f"Fallback GPU failed for PaddlePaddle: {e}")
+                paddle.set_device('gpu:0')
+                PADDLE_USE_GPU = True
+                print("PaddlePaddle is set to use GPU: gpu:0")
             else:
-                print("No available GPU found, fallback to cuda:0 for PyTorch, CPU for PaddlePaddle")
+                print("PaddlePaddle uses CPU")
     else:
         device = torch.device("cpu")
         print("Using CPU for all frameworks.")
 
 if device is None:
     device = torch.device("cpu")
-    PADDLE_GPU_AVAILABLE = False
     print("Device selection failed, defaulting to CPU.")
 
-# Set PADDLE_GPU_AVAILABLE to False if not defined (e.g. DirectML case)
-if 'PADDLE_GPU_AVAILABLE' not in locals():
-    PADDLE_GPU_AVAILABLE = False
-
+# This global flag is for PyTorch models (STTN, ProPainter)
 USE_GPU = (device.type != 'cpu') or USE_DML
+
+# Set PADDLE_USE_GPU to False if not defined (e.g. DirectML case)
+if 'PADDLE_USE_GPU' not in locals():
+    PADDLE_USE_GPU = False
 
 BASE_DIR = str(Path(os.path.abspath(__file__)).parent)
 LAMA_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'big-lama')
@@ -161,32 +171,36 @@ os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 # Whether to use ONNX for acceleration on non-Nvidia GPUs (DirectML, AMD, Intel, Apple)
 ONNX_PROVIDERS = []
-if USE_GPU == False:
-    try:
-        import onnxruntime as ort
-        available_providers = ort.get_available_providers()
-        for provider in available_providers:
-            if provider in [
-                "CPUExecutionProvider"
-            ]:
-                continue
-            if provider not in [
-                "DmlExecutionProvider",         # DirectML，适用于 Windows GPU
-                "ROCMExecutionProvider",        # AMD ROCm
-                "MIGraphXExecutionProvider",    # AMD MIGraphX
-                # "VitisAIExecutionProvider",   # AMD VitisAI，适用于 RyzenAI & Windows
-                "OpenVINOExecutionProvider",    # Intel GPU
-                "MetalExecutionProvider",       # Apple macOS
-                "CoreMLExecutionProvider",      # Apple macOS
-                "CUDAExecutionProvider",        # Nvidia GPU
-            ]:
-                print(interface_config['Main']['OnnxExectionProviderNotSupportedSkipped'].format(provider))
-                continue
-            print(interface_config['Main']['OnnxExecutionProviderDetected'].format(provider))
-            ONNX_PROVIDERS.append(provider)
-    except ModuleNotFoundError as e:
-        print(interface_config['Main']['OnnxRuntimeNotInstall'])
+try:
+    import onnxruntime as ort
+    available_providers = ort.get_available_providers()
+    print(f"Available ONNX Providers: {available_providers}")
+    for provider in available_providers:
+        if provider in [
+            "CPUExecutionProvider"
+        ]:
+            continue
+        if provider not in [
+            "DmlExecutionProvider",         # DirectML，适用于 Windows GPU
+            "ROCMExecutionProvider",        # AMD ROCm
+            "MIGraphXExecutionProvider",    # AMD MIGraphX
+            # "VitisAIExecutionProvider",   # AMD VitisAI，适用于 RyzenAI & Windows
+            "OpenVINOExecutionProvider",    # Intel GPU
+            "MetalExecutionProvider",       # Apple macOS
+            "CoreMLExecutionProvider",      # Apple macOS
+            "CUDAExecutionProvider",        # Nvidia GPU
+        ]:
+            print(interface_config['Main']['OnnxExectionProviderNotSupportedSkipped'].format(provider))
+            continue
+        print(interface_config['Main']['OnnxExecutionProviderDetected'].format(provider))
+        ONNX_PROVIDERS.append(provider)
+except (ImportError, ModuleNotFoundError) as e:
+    print(f"ONNX Runtime not found or failed to initialize, skipping ONNX support: {e}")
+except Exception as e:
+    print(f"An unexpected error occurred during ONNX provider detection: {e}")
+
 if len(ONNX_PROVIDERS) > 0:
+    # If we found an ONNX provider, we consider GPU to be available for general purposes
     USE_GPU = True
 
 # --- Language & Model Path Settings ---
@@ -329,13 +343,13 @@ MODE = InpaintMode.PROPAINTER
 
 # ×××××××××× OCR Settings start ××××××××××
 # GPU memory limit in MB for OCR processing
-GPU_MEMORY_LIMIT = 4096 if PADDLE_GPU_AVAILABLE else 2048
+GPU_MEMORY_LIMIT = 4096 if PADDLE_USE_GPU else 2048
 # For each image, recognize text in up to 6 text boxes simultaneously. The larger the GPU memory, the larger this value can be set.
-REC_BATCH_NUM = 12 if PADDLE_GPU_AVAILABLE else 6
+REC_BATCH_NUM = 12 if PADDLE_USE_GPU else 6
 # How many images are recognized in each batch of the DB algorithm, the default is 10
-MAX_BATCH_SIZE = 20 if PADDLE_GPU_AVAILABLE else 10
+MAX_BATCH_SIZE = 20 if PADDLE_USE_GPU else 10
 # OCR GPU availability (separate from general GPU availability)
-OCR_USE_GPU = PADDLE_GPU_AVAILABLE
+OCR_USE_GPU = PADDLE_USE_GPU
 # Confidence threshold for text detection. Lower values are less strict.
 DET_DB_BOX_THRESH = 0.6
 # Do not accept subtitles with a confidence level lower than 0.75

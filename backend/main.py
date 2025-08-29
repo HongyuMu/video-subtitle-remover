@@ -637,7 +637,7 @@ class SubtitleDetect:
 
 class SubtitleRemover:
     def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
-        importlib.reload(config)
+        # importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置（如果字幕位置始终不变）
@@ -960,9 +960,7 @@ class SubtitleRemover:
             sttn_inpaint = STTNInpaint()
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
-            print(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
-            print(continuous_frame_no_list)
             start_end_map = dict()
             for interval in continuous_frame_no_list:
                 start, end = interval
@@ -978,7 +976,6 @@ class SubtitleRemover:
                 # 判断当前帧号是不是字幕区间开始, 如果不是，则直接写
                 if current_frame_index not in start_end_map.keys():
                     self.video_writer.write(frame)
-                    print(f'write frame: {current_frame_index}')
                     self.update_progress(tbar, increment=1)
                     if self.gui_mode:
                         self.preview_frame = cv2.hconcat([frame, frame])
@@ -1255,176 +1252,80 @@ class SubtitleExtractor:
         Detects subtitle areas first, then performs OCR only on those areas.
         This is a more robust way to extract subtitles.
         """
-        print("[DEBUG] Starting _extract_subtitles_with_area_detection")
-        
-        video_cap = None
-        temp_raw_subtitle_file = None
+        if not self.detected_areas and not self.universal_box:
+            return "" # No subtitles to process
 
-        try:
-            if not self.detected_areas and not self.universal_box:
-                print("[DEBUG] No detected areas or universal box found, returning empty")
-                return "" # No subtitles to process
+        # Determine the universal box for OCR
+        if self.universal_box:
+            universal_box = self.universal_box
+            frames_to_scan = range(1, self.frame_count + 1)
+            print("Performing OCR on the user-defined universal subtitle region...")
+        else:
+            all_boxes = [box for box in self.detected_areas.values() if box]
+            if not all_boxes:
+                return ""
+            universal_box = find_smallest_bounding_box(all_boxes)
+            frames_to_scan = sorted(self.detected_areas.keys())
+            print("Performing OCR on the auto-detected universal subtitle region...")
 
-            print(f"[DEBUG] detected_areas: {bool(self.detected_areas)}, universal_box: {bool(self.universal_box)}")
+        if status_path:
+            try:
+                with open(status_path, 'w') as f:
+                    json.dump({"status": "Generating Subtitles", "stage": "Performing OCR", "progress": 0}, f)
+            except Exception:
+                pass
+
+        text_recogniser = get_ocr_recogniser()
+        temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
+        video_cap = cv2.VideoCapture(self.video_path)
+
+        xmin, xmax, ymin, ymax = universal_box
+        padding = 10
+        crop_xmin = max(0, xmin - padding)
+        crop_ymin = max(0, ymin - padding)
+        crop_xmax = min(self.frame_width, xmax + padding)
+        crop_ymax = min(self.frame_height, ymax + padding)
+
+        total_frames_to_ocr = len(frames_to_scan)
+        processed_frames = 0
+
+        for frame_no in tqdm(frames_to_scan, desc="OCR on Universal Region"):
+            # Frame numbers from detection are 1-based, need to seek to 0-based index
+            video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
+            ret, frame = video_cap.read()
+            if not ret:
+                processed_frames += 1
+                continue
             
-            # Determine the universal box for OCR
-            if self.universal_box:
-                universal_box = self.universal_box
-                frames_to_scan = range(1, self.frame_count + 1)
-                print(f"[DEBUG] Using universal box: {universal_box}")
-                print(f"[DEBUG] Frames to scan: {len(list(frames_to_scan))} frames (1 to {self.frame_count})")
-                print("Performing OCR on the user-defined universal subtitle region...")
-            else:
-                print("[DEBUG] Using detected areas for OCR")
-                all_boxes = [box for box in self.detected_areas.values() if box]
-                if not all_boxes:
-                    print("[DEBUG] No valid boxes in detected areas, returning empty")
-                    return ""
-                universal_box = find_smallest_bounding_box(all_boxes)
-                frames_to_scan = sorted(self.detected_areas.keys())
-                print(f"[DEBUG] Computed universal box from detected areas: {universal_box}")
-                print(f"[DEBUG] Frames to scan from detected areas: {len(frames_to_scan)} frames")
-                print("Performing OCR on the auto-detected universal subtitle region...")
+            cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
 
-            print(f"[DEBUG] Final universal box: {universal_box}")
-            print(f"[DEBUG] Frame dimensions: {self.frame_width}x{self.frame_height}")
+            if cropped_frame.size == 0:
+                processed_frames += 1
+                continue
+            
+            dt_box, rec_res = text_recogniser.predict(cropped_frame)
 
-            if status_path:
+            if rec_res:
+                recognized_coordinates = get_coordinates(dt_box)
+                for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
+                    full_frame_coords = (
+                        b_xmin + crop_xmin, b_xmax + crop_xmin,
+                        b_ymin + crop_ymin, b_ymax + crop_ymin
+                    )
+                    temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
+
+            processed_frames += 1
+            if status_path and total_frames_to_ocr > 0:
                 try:
-                    print(f"[DEBUG] Writing initial status to {status_path}")
+                    percent = int((processed_frames / total_frames_to_ocr) * 100)
                     with open(status_path, 'w') as f:
-                        json.dump({"status": "Generating Subtitles", "stage": "Performing OCR", "progress": 0}, f)
-                    print("[DEBUG] Initial status written successfully")
-                except Exception as e:
-                    print(f"[DEBUG] Failed to write initial status: {e}")
+                        json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
+                except Exception:
+                    pass
 
-            print("[DEBUG] Getting OCR recogniser...")
-            text_recogniser = get_ocr_recogniser()
-            print(f"[DEBUG] OCR recogniser obtained successfully: {type(text_recogniser)}")
-
-            print("[DEBUG] Creating temporary subtitle file...")
-            temp_raw_subtitle_file = tempfile.NamedTemporaryFile(suffix='.txt', delete=False, mode='w', encoding='utf-8')
-            print(f"[DEBUG] Temporary file created: {temp_raw_subtitle_file.name}")
-
-            print(f"[DEBUG] Opening video: {self.video_path}")
-            video_cap = cv2.VideoCapture(self.video_path)
-            if not video_cap.isOpened():
-                raise Exception("Failed to open video capture")
-            print("[DEBUG] Video capture opened successfully")
-
-            xmin, xmax, ymin, ymax = universal_box
-            padding = 10
-            crop_xmin = max(0, xmin - padding)
-            crop_ymin = max(0, ymin - padding)
-            crop_xmax = min(self.frame_width, xmax + padding)
-            crop_ymax = min(self.frame_height, ymax + padding)
-
-            print(f"[DEBUG] Crop region: ({crop_xmin}, {crop_ymin}) to ({crop_xmax}, {crop_ymax})")
-            print(f"[DEBUG] Crop dimensions: {crop_xmax - crop_xmin}x{crop_ymax - crop_ymin}")
-
-            total_frames_to_ocr = len(list(frames_to_scan))
-            processed_frames = 0
-            print(f"[DEBUG] Total frames to process: {total_frames_to_ocr}")
-
-            # Process frames in batches for better GPU utilization
-            ocr_use_gpu = getattr(config, 'OCR_USE_GPU', False)
-            batch_size = config.MAX_BATCH_SIZE if ocr_use_gpu else 10
-            frames_list = list(frames_to_scan)
-            print(f"[DEBUG] Using batch size: {batch_size}, OCR GPU enabled: {ocr_use_gpu}")
-            
-            batch_count = 0
-            for batch_start in tqdm(range(0, len(frames_list), batch_size), desc="OCR Processing Batches"):
-                batch_count += 1
-                print(f"[DEBUG] Processing batch {batch_count}, starting at frame index {batch_start}")
-                
-                batch_frames = frames_list[batch_start:batch_start + batch_size]
-                batch_images = []
-                batch_frame_numbers = []
-                
-                print(f"[DEBUG] Batch {batch_count}: Loading {len(batch_frames)} frames")
-                
-                frames_loaded = 0
-                for frame_no in batch_frames:
-                    video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
-                    ret, frame = video_cap.read()
-                    if not ret:
-                        print(f"[DEBUG] Failed to read frame {frame_no}")
-                        continue
-                        
-                    cropped_frame = frame[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-                    if cropped_frame.size == 0:
-                        print(f"[DEBUG] Empty cropped frame for frame {frame_no}")
-                        continue
-                        
-                    batch_images.append(cropped_frame)
-                    batch_frame_numbers.append(frame_no)
-                    frames_loaded += 1
-                
-                print(f"[DEBUG] Batch {batch_count}: Successfully loaded {frames_loaded}/{len(batch_frames)} frames")
-                
-                if batch_images:
-                    print(f"[DEBUG] Batch {batch_count}: Starting OCR on {len(batch_images)} images")
-                    
-                    if hasattr(text_recogniser, 'predict_parallel_frames') and len(batch_images) > 4:
-                        print(f"[DEBUG] Batch {batch_count}: Using parallel OCR processing")
-                        batch_results = text_recogniser.predict_parallel_frames(batch_images)
-                    else:
-                        print(f"[DEBUG] Batch {batch_count}: Using batch OCR processing")
-                        batch_results = text_recogniser.predict_batch(batch_images)
-                    
-                    print(f"[DEBUG] Batch {batch_count}: OCR completed, got {len(batch_results)} results")
-                    
-                    texts_found = 0
-                    for i, (dt_box, rec_res) in enumerate(batch_results):
-                        if rec_res and i < len(batch_frame_numbers):
-                            frame_no = batch_frame_numbers[i]
-                            recognized_coordinates = get_coordinates(dt_box)
-                            for (text, prob), (b_xmin, b_xmax, b_ymin, b_ymax) in zip(rec_res, recognized_coordinates):
-                                full_frame_coords = (
-                                    b_xmin + crop_xmin, b_xmax + crop_xmin,
-                                    b_ymin + crop_ymin, b_ymax + crop_ymin
-                                )
-                                temp_raw_subtitle_file.write(f'{str(frame_no).zfill(8)}\t{full_frame_coords}\t{text}\n')
-                                texts_found += 1
-                    
-                    print(f"[DEBUG] Batch {batch_count}: Found {texts_found} text segments")
-                else:
-                    print(f"[DEBUG] Batch {batch_count}: No valid images to process")
-
-                processed_frames += len(batch_frames)
-                if status_path and total_frames_to_ocr > 0:
-                    try:
-                        percent = int((processed_frames / total_frames_to_ocr) * 100)
-                        with open(status_path, 'w') as f:
-                            json.dump({"status": "Generating Subtitles", "stage": "OCR", "progress": percent}, f)
-                        print(f"[DEBUG] Progress updated: {percent}% ({processed_frames}/{total_frames_to_ocr})")
-                    except Exception as e:
-                        print(f"[DEBUG] Failed to update progress: {e}")
-
-            print(f"[DEBUG] OCR extraction completed successfully, returning: {temp_raw_subtitle_file.name}")
-            return temp_raw_subtitle_file.name
-        
-        except Exception as e:
-            print(f"[DEBUG] CRITICAL ERROR in _extract_subtitles_with_area_detection: {e}")
-            import traceback
-            print(f"[DEBUG] Full traceback: {traceback.format_exc()}")
-            raise
-        
-        finally:
-            print("[DEBUG] Finishing OCR processing (cleanup)...")
-            if video_cap is not None:
-                try:
-                    video_cap.release()
-                    print("[DEBUG] Video capture released")
-                except Exception as e:
-                    print(f"[DEBUG] Error releasing video capture: {e}")
-
-            if temp_raw_subtitle_file is not None:
-                try:
-                    temp_raw_subtitle_file.close()
-                    print(f"[DEBUG] Temporary file closed: {temp_raw_subtitle_file.name}")
-                except Exception as e:
-                    print(f"[DEBUG] Error closing temporary file: {e}")
+        video_cap.release()
+        temp_raw_subtitle_file.close()
+        return temp_raw_subtitle_file.name
 
     def generate_subtitle_file(self):
         """
@@ -1459,7 +1360,6 @@ class SubtitleExtractor:
     def srt2txt(srt_file):
         subs = pysrt.open(srt_file, encoding='utf-8')
         output_path = os.path.join(os.path.dirname(srt_file), Path(srt_file).stem + '.txt')
-        print(output_path)
         with open(output_path, 'w', encoding='utf-8') as f:
             for sub in subs:
                 f.write(f'{sub.index}\n')

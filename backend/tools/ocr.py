@@ -2,10 +2,6 @@ import os
 from backend import config
 import importlib
 from paddleocr import PaddleOCR
-import cv2
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 
 # --- Singleton Pattern for OCR Model ---
 _ocr_recogniser_instance = None
@@ -48,132 +44,22 @@ class OcrRecogniser:
         else:
             return [], []
 
-    def predict_batch(self, images):
-        """
-        Performs OCR on a batch of images by separating detection and recognition.
-        Optimized for GPU with larger batch sizes.
-        """
-        if not images:
-            return []
-
-        # Increase batch size for GPU processing
-        ocr_use_gpu = getattr(config, 'OCR_USE_GPU', False)
-        effective_batch_size = min(len(images), config.MAX_BATCH_SIZE * 2 if ocr_use_gpu else config.MAX_BATCH_SIZE)
-        
-        # Process images in optimized batches
-        batch_results = []
-        for i in range(0, len(images), effective_batch_size):
-            batch_imgs = images[i:i + effective_batch_size]
-            
-            # 1. Batch Detection with GPU acceleration
-            all_dt_boxes, _ = self.recogniser.text_detector(batch_imgs)
-
-            for j, dt_boxes in enumerate(all_dt_boxes):
-                if dt_boxes is None or len(dt_boxes) == 0:
-                    batch_results.append(([], []))
-                    continue
-                
-                # 2. Prepare images for recognition based on detected boxes
-                img = batch_imgs[j]
-                img_crop_list = []
-                
-                for box in dt_boxes:
-                    img_crop = self.recogniser.get_rotate_crop_image(img, box)
-                    img_crop_list.append(img_crop)
-
-                # 3. Batch Recognition on the crops with larger batch size for GPU
-                if not img_crop_list:
-                    batch_results.append((dt_boxes.tolist(), []))
-                    continue
-
-                # Process recognition in larger batches for GPU efficiency
-                rec_batch_size = config.REC_BATCH_NUM * 2 if ocr_use_gpu else config.REC_BATCH_NUM
-                all_rec_res = []
-                
-                for k in range(0, len(img_crop_list), rec_batch_size):
-                    crop_batch = img_crop_list[k:k + rec_batch_size]
-                    rec_res, _ = self.recogniser.text_recognizer(crop_batch)
-                    all_rec_res.extend(rec_res)
-                
-                batch_results.append((dt_boxes.tolist(), all_rec_res))
-
-        return batch_results
-
-    def predict_parallel_frames(self, frames, max_workers=None):
-        """
-        Process multiple video frames in parallel for faster OCR.
-        Each worker processes a subset of frames using batch processing.
-        """
-        if not frames:
-            return []
-        
-        if max_workers is None:
-            # Use 2-4 workers for GPU to avoid memory conflicts, more for CPU
-            ocr_use_gpu = getattr(config, 'OCR_USE_GPU', False)
-            max_workers = 2 if ocr_use_gpu else min(4, len(frames))
-        
-        # Split frames into chunks for parallel processing
-        chunk_size = max(1, len(frames) // max_workers)
-        frame_chunks = [frames[i:i + chunk_size] for i in range(0, len(frames), chunk_size)]
-        
-        results = [None] * len(frames)
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit chunks for processing
-            future_to_chunk = {}
-            for chunk_idx, chunk in enumerate(frame_chunks):
-                if chunk:  # Only submit non-empty chunks
-                    future = executor.submit(self._process_frame_chunk, chunk)
-                    future_to_chunk[future] = (chunk_idx, len(chunk))
-            
-            # Collect results
-            for future in as_completed(future_to_chunk):
-                chunk_idx, chunk_len = future_to_chunk[future]
-                try:
-                    chunk_results = future.result()
-                    # Place results in correct positions
-                    start_idx = chunk_idx * chunk_size
-                    for i, result in enumerate(chunk_results):
-                        if start_idx + i < len(results):
-                            results[start_idx + i] = result
-                except Exception as e:
-                    print(f"Error processing frame chunk {chunk_idx}: {e}")
-                    # Fill with empty results for failed chunk
-                    start_idx = chunk_idx * chunk_size
-                    for i in range(chunk_len):
-                        if start_idx + i < len(results):
-                            results[start_idx + i] = ([], [])
-        
-        return [r for r in results if r is not None]
-    
-    def _process_frame_chunk(self, frame_chunk):
-        """
-        Process a chunk of frames using batch processing.
-        """
-        return self.predict_batch(frame_chunk)
-
     def init_model(self):
         # Increase GPU memory allocation for better performance with larger batches and high-res video.
-        gpu_mem = config.GPU_MEMORY_LIMIT if hasattr(config, 'GPU_MEMORY_LIMIT') else 4096
+        gpu_mem = config.GPU_MEMORY_LIMIT if hasattr(config, 'GPU_MEMORY_LIMIT') else 2048
         
         # Check for ONNX runtime availability to automatically enable it if possible.
         use_onnx_runtime = len(config.ONNX_PROVIDERS) > 0
-        try:
-            import onnxruntime
-        except ImportError:
-            use_onnx_runtime = False
 
-        # Use OCR-specific GPU availability flag from config
-        use_gpu = getattr(config, 'OCR_USE_GPU', False)
-        
-        if use_gpu:
-            # The device is set globally in config.py, so we just log it here
-            gpu_id = config.device.index if hasattr(config, 'device') and config.device.type == 'cuda' and config.device.index is not None else 0
-            print(f"OCR using GPU: {gpu_id} (device configured globally)")
-        else:
-            print("OCR using CPU (PaddlePaddle not compiled with CUDA or GPU unavailable)")
+        # Use the specific flag for PaddlePaddle GPU.
+        # PaddleOCR will use ONNX/DirectML if use_onnx_runtime is True, even if use_gpu is False.
+        use_gpu_for_paddle = config.OCR_USE_GPU
 
-        return PaddleOCR(use_gpu=use_gpu,
+        print(f"Initializing PaddleOCR with use_gpu={use_gpu_for_paddle}, use_onnx={use_onnx_runtime}")
+        if use_onnx_runtime:
+            print(f"ONNX Providers: {config.ONNX_PROVIDERS}")
+
+        return PaddleOCR(use_gpu=use_gpu_for_paddle,
                          gpu_mem=gpu_mem,
                          det_algorithm='DB',
                          # 设置文本检测模型路径
