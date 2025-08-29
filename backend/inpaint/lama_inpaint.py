@@ -9,6 +9,9 @@ from backend import config
 
 class LamaInpaint:
     def __init__(self, device: torch.device = torch.device("cuda" if torch.cuda.is_available() else "cpu"), model_path=None) -> None:
+        # Respect the GPU selected in config if available
+        if hasattr(config, 'device') and isinstance(config.device, torch.device):
+            device = config.device
         if model_path is None:
             model_path = os.path.join(config.LAMA_MODEL_PATH, 'big-lama.pt')
         self.model = torch.jit.load(model_path, map_location=device)

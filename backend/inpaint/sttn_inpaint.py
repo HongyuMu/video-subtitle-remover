@@ -26,6 +26,12 @@ _to_tensors = transforms.Compose([
 
 class STTNInpaint:
     def __init__(self):
+        # Respect the GPU selected in config
+        if hasattr(config, 'device') and isinstance(config.device, torch.device) and config.device.type == 'cuda':
+            try:
+                torch.cuda.set_device(config.device)
+            except Exception:
+                pass
         self.device = config.device
         # 1. create InpaintGenerator model instance and load to selected device
         self.model = InpaintGenerator().to(self.device)

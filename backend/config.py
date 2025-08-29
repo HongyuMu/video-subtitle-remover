@@ -2,7 +2,10 @@ import warnings
 from enum import Enum, unique
 warnings.filterwarnings('ignore')
 import os
+# Set PyTorch CUDA memory allocation configuration before importing torch
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 import torch
+
 import logging
 import platform
 import stat
