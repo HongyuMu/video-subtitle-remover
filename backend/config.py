@@ -187,7 +187,11 @@ ONNX_PROVIDERS = []
 try:
     import onnxruntime as ort
     available_providers = ort.get_available_providers()
-    print(f"Available ONNX Providers: {available_providers}")
+    
+    # Only print ONNX info if this is the first time (not from child process)
+    if not os.environ.get('SELECTED_GPU_DEVICES'):
+        print(f"Available ONNX Providers: {available_providers}")
+    
     for provider in available_providers:
         if provider in [
             "CPUExecutionProvider"
@@ -203,14 +207,18 @@ try:
             "CoreMLExecutionProvider",      # Apple macOS
             "CUDAExecutionProvider",        # Nvidia GPU
         ]:
-            print(interface_config['Main']['OnnxExectionProviderNotSupportedSkipped'].format(provider))
+            if not os.environ.get('SELECTED_GPU_DEVICES'):
+                print(interface_config['Main']['OnnxExectionProviderNotSupportedSkipped'].format(provider))
             continue
-        print(interface_config['Main']['OnnxExecutionProviderDetected'].format(provider))
+        if not os.environ.get('SELECTED_GPU_DEVICES'):
+            print(interface_config['Main']['OnnxExecutionProviderDetected'].format(provider))
         ONNX_PROVIDERS.append(provider)
 except (ImportError, ModuleNotFoundError) as e:
-    print(f"ONNX Runtime not found or failed to initialize, skipping ONNX support: {e}")
+    if not os.environ.get('SELECTED_GPU_DEVICES'):
+        print(f"ONNX Runtime not found or failed to initialize, skipping ONNX support: {e}")
 except Exception as e:
-    print(f"An unexpected error occurred during ONNX provider detection: {e}")
+    if not os.environ.get('SELECTED_GPU_DEVICES'):
+        print(f"An unexpected error occurred during ONNX provider detection: {e}")
 
 if len(ONNX_PROVIDERS) > 0:
     # If we found an ONNX provider, we consider GPU to be available for general purposes
