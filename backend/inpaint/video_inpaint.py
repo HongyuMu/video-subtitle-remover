@@ -240,8 +240,20 @@ class VideoInpaint:
     def inpaint(self, frames, mask):
         if isinstance(frames[0], np.ndarray):
             frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames]
+        
+        # Validate inputs
+        if not frames:
+            raise ValueError("No frames provided for inpainting")
+        
         size = frames[0].size
         frames_len = len(frames)
+        
+        # Ensure all frames have the same size
+        for i, frame in enumerate(frames):
+            if frame.size != size:
+                print(f"Warning: Frame {i} has size {frame.size}, expected {size}. Resizing.")
+                frames[i] = frame.resize(size, Image.LANCZOS)
+        
         flow_masks, masks_dilated = read_mask(mask, frames_len, size,
                                               flow_mask_dilates=self.mask_dilation,
                                               mask_dilates=self.mask_dilation)
@@ -263,9 +275,24 @@ class VideoInpaint:
         frames = to_tensors()(frames).unsqueeze(0) * 2 - 1
         flow_masks = to_tensors()(flow_masks).unsqueeze(0)
         masks_dilated = to_tensors()(masks_dilated).unsqueeze(0)
+        
+        # Validate tensor shapes before moving to device
+        if frames.numel() == 0:
+            raise ValueError("Frames tensor is empty")
+        if flow_masks.numel() == 0:
+            raise ValueError("Flow masks tensor is empty")
+        if masks_dilated.numel() == 0:
+            raise ValueError("Masks dilated tensor is empty")
+            
+        print(f"[VideoInpaint] Tensor shapes - frames: {frames.shape}, flow_masks: {flow_masks.shape}, masks_dilated: {masks_dilated.shape}")
+        
         frames, flow_masks, masks_dilated = frames.to(self.device), flow_masks.to(self.device), masks_dilated.to(
             self.device)
         video_length = frames.size(1)
+        
+        # Additional validation
+        if video_length == 0:
+            raise ValueError("Video length is 0")
         with torch.no_grad():
             # ---- compute flow ----
             if frames.size(-1) <= 640:
@@ -283,17 +310,38 @@ class VideoInpaint:
                 for f in range(0, video_length, short_clip_len):
                     end_f = min(video_length, f + short_clip_len)
                     if f == 0:
-                        flows_f, flows_b = self.fix_raft(frames[:, f:end_f], iters=self.raft_iter)
+                        frame_chunk = frames[:, f:end_f]
                     else:
-                        flows_f, flows_b = self.fix_raft(frames[:, f - 1:end_f], iters=self.raft_iter)
-                    gt_flows_f_list.append(flows_f)
-                    gt_flows_b_list.append(flows_b)
+                        frame_chunk = frames[:, f - 1:end_f]
+                    
+                    # Validate frame chunk before RAFT processing
+                    if frame_chunk.numel() == 0:
+                        print(f"Warning: Empty frame chunk at range {f}:{end_f}")
+                        continue
+                    
+                    print(f"[RAFT] Processing chunk {f}:{end_f}, shape: {frame_chunk.shape}")
+                    try:
+                        flows_f, flows_b = self.fix_raft(frame_chunk, iters=self.raft_iter)
+                        gt_flows_f_list.append(flows_f)
+                        gt_flows_b_list.append(flows_b)
+                    except Exception as e:
+                        print(f"[RAFT] Error processing chunk {f}:{end_f}: {e}")
+                        raise
                     self._empty_cache()
+                
+                if not gt_flows_f_list:
+                    raise ValueError("No valid flow chunks were processed")
+                    
                 gt_flows_f = torch.cat(gt_flows_f_list, dim=1)
                 gt_flows_b = torch.cat(gt_flows_b_list, dim=1)
                 gt_flows_bi = (gt_flows_f, gt_flows_b)
             else:
-                gt_flows_bi = self.fix_raft(frames, iters=self.raft_iter)
+                print(f"[RAFT] Processing full video, shape: {frames.shape}")
+                try:
+                    gt_flows_bi = self.fix_raft(frames, iters=self.raft_iter)
+                except Exception as e:
+                    print(f"[RAFT] Error processing full video: {e}")
+                    raise
                 self._empty_cache()
 
             if self.use_half:

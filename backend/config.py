@@ -89,24 +89,32 @@ except (ImportError, Exception):
             primary_gpu_id = available_gpu_ids[0]
             device = torch.device(f"cuda:{primary_gpu_id}")
             torch.cuda.set_device(device)
-            print(f"PyTorch is using primary GPU: {device}")
-
-            # Populate the list of all available devices for workers
-            DEVICES = [torch.device(f"cuda:{gid}") for gid in available_gpu_ids]
-            print(f"Available worker GPUs for parallel processing: {[str(d) for d in DEVICES]}")
+            
+            # Only print GPU info if this is the first time (not from child process)
+            if not selected_gpus_env:
+                print(f"PyTorch is using primary GPU: {device}")
+                # Populate the list of all available devices for workers
+                DEVICES = [torch.device(f"cuda:{gid}") for gid in available_gpu_ids]
+                print(f"Available worker GPUs for parallel processing: {[str(d) for d in DEVICES]}")
+            else:
+                DEVICES = [torch.device(f"cuda:{gid}") for gid in available_gpu_ids]
 
             if paddle.is_compiled_with_cuda():
                 try:
                     paddle.set_device(f'gpu:{primary_gpu_id}')
                     PADDLE_USE_GPU = True
-                    print(f"PaddlePaddle is set to use GPU: gpu:{primary_gpu_id}")
+                    if not selected_gpus_env:
+                        print(f"PaddlePaddle is set to use GPU: gpu:{primary_gpu_id}")
                 except Exception as e:
-                    print(f"PyTorch GPU available but PaddlePaddle GPU failed to initialize: {e}")
+                    if not selected_gpus_env:
+                        print(f"PyTorch GPU available but PaddlePaddle GPU failed to initialize: {e}")
             else:
-                 print("PaddlePaddle: CPU (not compiled with CUDA)")
+                if not selected_gpus_env:
+                    print("PaddlePaddle: CPU (not compiled with CUDA)")
         else:
             device = torch.device("cpu")
-            print("No suitable GPUs found, falling back to CPU.")
+            if not selected_gpus_env:
+                print("No suitable GPUs found, falling back to CPU.")
 
     else:
         device = torch.device("cpu")

@@ -907,18 +907,21 @@ class SubtitleRemover:
             mask = create_mask(self.mask_size, [(xmin, xmax, ymin, ymax)])
             task_queue.put((i, frames_to_process, mask))
         
-        # Start worker processes
+                 # Start worker processes
         num_workers = len(config.DEVICES)
         workers = []
         for i in range(num_workers):
             gpu_id = config.DEVICES[i].index
             worker_process = multiprocessing.Process(
                 target=inpaint_worker,
-                args=(task_queue, result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, True)
+                args=(task_queue, result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
             )
             workers.append(worker_process)
             worker_process.start()
-            task_queue.put(None) # Sentinel for each worker
+         
+        # Send sentinels to signal workers to stop
+        for _ in range(num_workers):
+            task_queue.put(None)
 
         # Collect results
         self.set_stage('inpaint', total_inpaint_frames, tbar)
