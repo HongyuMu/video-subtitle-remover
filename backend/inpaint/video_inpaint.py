@@ -244,7 +244,7 @@ class VideoInpaint:
         # Validate inputs
         if not frames:
             raise ValueError("No frames provided for inpainting")
-        
+            
         size = frames[0].size
         frames_len = len(frames)
         
@@ -275,7 +275,7 @@ class VideoInpaint:
         frames = to_tensors()(frames).unsqueeze(0) * 2 - 1
         flow_masks = to_tensors()(flow_masks).unsqueeze(0)
         masks_dilated = to_tensors()(masks_dilated).unsqueeze(0)
-        
+
         # Validate tensor shapes before moving to device
         if frames.numel() == 0:
             raise ValueError("Frames tensor is empty")
@@ -284,8 +284,6 @@ class VideoInpaint:
         if masks_dilated.numel() == 0:
             raise ValueError("Masks dilated tensor is empty")
             
-        print(f"[VideoInpaint] Tensor shapes - frames: {frames.shape}, flow_masks: {flow_masks.shape}, masks_dilated: {masks_dilated.shape}")
-        
         frames, flow_masks, masks_dilated = frames.to(self.device), flow_masks.to(self.device), masks_dilated.to(
             self.device)
         video_length = frames.size(1)
@@ -293,9 +291,13 @@ class VideoInpaint:
         # Additional validation
         if video_length == 0:
             raise ValueError("Video length is 0")
+
         with torch.no_grad():
             # ---- compute flow ----
-            if frames.size(-1) <= 640:
+            # Reduce chunk size for high-resolution video to prevent OOM
+            if frames.size(-2) >= 720: # Check frame height
+                short_clip_len = 4
+            elif frames.size(-1) <= 640:
                 short_clip_len = 12
             elif frames.size(-1) <= 720:
                 short_clip_len = 8
@@ -319,7 +321,6 @@ class VideoInpaint:
                         print(f"Warning: Empty frame chunk at range {f}:{end_f}")
                         continue
                     
-                    print(f"[RAFT] Processing chunk {f}:{end_f}, shape: {frame_chunk.shape}")
                     try:
                         flows_f, flows_b = self.fix_raft(frame_chunk, iters=self.raft_iter)
                         gt_flows_f_list.append(flows_f)
@@ -336,7 +337,6 @@ class VideoInpaint:
                 gt_flows_b = torch.cat(gt_flows_b_list, dim=1)
                 gt_flows_bi = (gt_flows_f, gt_flows_b)
             else:
-                print(f"[RAFT] Processing full video, shape: {frames.shape}")
                 try:
                     gt_flows_bi = self.fix_raft(frames, iters=self.raft_iter)
                 except Exception as e:
@@ -347,7 +347,8 @@ class VideoInpaint:
             if self.use_half:
                 frames, flow_masks, masks_dilated = frames.half(), flow_masks.half(), masks_dilated.half()
                 gt_flows_bi = (gt_flows_bi[0].half(), gt_flows_bi[1].half())
-                fix_flow_complete = self.fix_flow_complete.half()
+                # Use self.fix_flow_complete instead of creating a local variable
+                self.fix_flow_complete = self.fix_flow_complete.half()
                 self.model = self.model.half()
 
             # ---- complete flow ----
@@ -360,10 +361,10 @@ class VideoInpaint:
                     e_f = min(flow_length, f + self.sub_video_length + pad_len)
                     pad_len_s = max(0, f) - s_f
                     pad_len_e = e_f - min(flow_length, f + self.sub_video_length)
-                    pred_flows_bi_sub, _ = fix_flow_complete.forward_bidirect_flow(
+                    pred_flows_bi_sub, _ = self.fix_flow_complete.forward_bidirect_flow(
                         (gt_flows_bi[0][:, s_f:e_f], gt_flows_bi[1][:, s_f:e_f]),
                         flow_masks[:, s_f:e_f + 1])
-                    pred_flows_bi_sub = fix_flow_complete.combine_flow(
+                    pred_flows_bi_sub = self.fix_flow_complete.combine_flow(
                         (gt_flows_bi[0][:, s_f:e_f], gt_flows_bi[1][:, s_f:e_f]),
                         pred_flows_bi_sub,
                         flow_masks[:, s_f:e_f + 1])
@@ -376,8 +377,8 @@ class VideoInpaint:
                 pred_flows_b = torch.cat(pred_flows_b, dim=1)
                 pred_flows_bi = (pred_flows_f, pred_flows_b)
             else:
-                pred_flows_bi, _ = fix_flow_complete.forward_bidirect_flow(gt_flows_bi, flow_masks)
-                pred_flows_bi = fix_flow_complete.combine_flow(gt_flows_bi, pred_flows_bi, flow_masks)
+                pred_flows_bi, _ = self.fix_flow_complete.forward_bidirect_flow(gt_flows_bi, flow_masks)
+                pred_flows_bi = self.fix_flow_complete.combine_flow(gt_flows_bi, pred_flows_bi, flow_masks)
                 self._empty_cache()
 
             # ---- image propagation ----
