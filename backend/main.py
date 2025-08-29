@@ -637,7 +637,7 @@ class SubtitleDetect:
 
 class SubtitleRemover:
     def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
-        importlib.reload(config)
+        # importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
         # 用户指定的字幕区域位置（如果字幕位置始终不变）
@@ -960,9 +960,7 @@ class SubtitleRemover:
             sttn_inpaint = STTNInpaint()
             sub_list = self.sub_detector.find_subtitle_frame_no(sub_remover=self)
             continuous_frame_no_list = self.sub_detector.find_continuous_ranges_with_same_mask(sub_list)
-            print(continuous_frame_no_list)
             continuous_frame_no_list = self.sub_detector.filter_and_merge_intervals(continuous_frame_no_list)
-            print(continuous_frame_no_list)
             start_end_map = dict()
             for interval in continuous_frame_no_list:
                 start, end = interval
@@ -978,7 +976,6 @@ class SubtitleRemover:
                 # 判断当前帧号是不是字幕区间开始, 如果不是，则直接写
                 if current_frame_index not in start_end_map.keys():
                     self.video_writer.write(frame)
-                    print(f'write frame: {current_frame_index}')
                     self.update_progress(tbar, increment=1)
                     if self.gui_mode:
                         self.preview_frame = cv2.hconcat([frame, frame])
@@ -1363,7 +1360,6 @@ class SubtitleExtractor:
     def srt2txt(srt_file):
         subs = pysrt.open(srt_file, encoding='utf-8')
         output_path = os.path.join(os.path.dirname(srt_file), Path(srt_file).stem + '.txt')
-        print(output_path)
         with open(output_path, 'w', encoding='utf-8') as f:
             for sub in subs:
                 f.write(f'{sub.index}\n')

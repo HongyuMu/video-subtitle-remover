@@ -71,11 +71,19 @@ except (ImportError, Exception):
     USE_DML = False
     PADDLE_USE_GPU = False # Flag specific for PaddleOCR
     if torch.cuda.is_available():
-        best_gpu_id = get_best_gpu()
+        # Check for an already selected device to ensure consistency
+        selected_gpu_env = os.environ.get('SELECTED_CUDA_DEVICE')
+        if selected_gpu_env:
+            best_gpu_id = int(selected_gpu_env)
+        else:
+            best_gpu_id = get_best_gpu()
+            if best_gpu_id is not None:
+                os.environ['SELECTED_CUDA_DEVICE'] = str(best_gpu_id)
+
         if best_gpu_id is not None:
             device = torch.device(f"cuda:{best_gpu_id}")
             torch.cuda.set_device(device)
-            print(f"PyTorch is using GPU: {device}")
+            print(f"PyTorch is using GPU: {device} with type {device.type}")
             if paddle.is_compiled_with_cuda():
                 try:
                     paddle.set_device(f'gpu:{best_gpu_id}')
@@ -94,7 +102,7 @@ except (ImportError, Exception):
                 PADDLE_USE_GPU = True
                 print("PaddlePaddle is set to use GPU: gpu:0")
             else:
-                print("PaddlePaddle: CPU (not compiled with CUDA)")
+                print("PaddlePaddle uses CPU")
     else:
         device = torch.device("cpu")
         print("Using CPU for all frameworks.")
