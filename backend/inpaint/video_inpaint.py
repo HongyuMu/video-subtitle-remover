@@ -19,6 +19,49 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+# Worker function for multiprocessing
+def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16):
+    """
+    A worker process that initializes a VideoInpaint model on a specific GPU
+    and processes video chunks from the task queue.
+    """
+    print(f"[Worker-{gpu_id}] Initializing on cuda:{gpu_id}")
+    try:
+        # Pin this process to the assigned GPU to avoid accidental cross-device ops
+        try:
+            torch.cuda.set_device(gpu_id)
+        except Exception:
+            pass
+        
+        # Each worker needs its own model instance on its assigned GPU
+        video_inpaint = VideoInpaint(sub_video_length=sub_video_length, use_fp16=use_fp16, gpu_id=gpu_id)
+        
+        while True:
+            task = task_queue.get()
+            if task is None:  # Sentinel value to stop the worker
+                break
+                
+            interval_idx, frames_np, mask_np = task
+            print(f"[Worker-{gpu_id}] Processing interval {interval_idx} with {len(frames_np)} frames.")
+            
+            # Convert numpy arrays to PIL Images for the inpaint function
+            frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_np]
+            
+            inpainted_frames = video_inpaint.inpaint(frames, mask_np)
+            
+            # Convert back to numpy for pickling
+            inpainted_frames_np = [cv2.cvtColor(f, cv2.COLOR_RGB2BGR) for f in inpainted_frames]
+            
+            result_queue.put((interval_idx, inpainted_frames_np))
+            print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
+
+    except Exception as e:
+        print(f"[Worker-{gpu_id}] Error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        print(f"[Worker-{gpu_id}] Exiting.")
+
 
 def binary_mask(mask, th=0.1):
     mask[mask > th] = 1
@@ -130,14 +173,18 @@ def get_ref_index(mid_neighbor_id, neighbor_ids, length, ref_stride=10, ref_num=
 
 
 class VideoInpaint:
-    def __init__(self, sub_video_length=config.PROPAINTER_MAX_LOAD_NUM, use_fp16=True):
-        # Explicitly use the GPU selected in config (falls back to CPU if not CUDA)
-        selected_gpu = None
-        try:
-            if isinstance(config.device, torch.device) and config.device.type == 'cuda':
-                selected_gpu = config.device.index if config.device.index is not None else 0
-        except Exception:
+    def __init__(self, sub_video_length=config.PROPAINTER_MAX_LOAD_NUM, use_fp16=True, gpu_id=None):
+        # If gpu_id is not specified, use the primary device from config
+        if gpu_id is None:
             selected_gpu = None
+            try:
+                if isinstance(config.device, torch.device) and config.device.type == 'cuda':
+                    selected_gpu = config.device.index if config.device.index is not None else 0
+            except Exception:
+                selected_gpu = None
+        else:
+            selected_gpu = gpu_id
+        
         self.device = get_device(gpu_id=selected_gpu)
         self.use_fp16 = use_fp16
         self.use_half = True if self.use_fp16 else False
@@ -155,12 +202,22 @@ class VideoInpaint:
         self.raft_iter = 20
         # Stride of global reference frames
         self.ref_stride = 10
+        # helper to safely clear device cache
+        
         # 设置raft模型
         self.fix_raft = self.init_raft_model()
         # 设置fix_flow模型
         self.fix_flow_complete = self.init_fix_flow_model()
         # 设置inpaint模型
         self.model = self.init_inpaint_model()
+
+    def _empty_cache(self):
+        try:
+            if self.device.type == 'cuda':
+                with torch.cuda.device(self.device):
+                    torch.cuda.empty_cache()
+        except Exception:
+            pass
 
     def init_raft_model(self):
         # set up RAFT and flow competition model
@@ -231,13 +288,13 @@ class VideoInpaint:
                         flows_f, flows_b = self.fix_raft(frames[:, f - 1:end_f], iters=self.raft_iter)
                     gt_flows_f_list.append(flows_f)
                     gt_flows_b_list.append(flows_b)
-                    torch.cuda.empty_cache()
+                    self._empty_cache()
                 gt_flows_f = torch.cat(gt_flows_f_list, dim=1)
                 gt_flows_b = torch.cat(gt_flows_b_list, dim=1)
                 gt_flows_bi = (gt_flows_f, gt_flows_b)
             else:
                 gt_flows_bi = self.fix_raft(frames, iters=self.raft_iter)
-                torch.cuda.empty_cache()
+                self._empty_cache()
 
             if self.use_half:
                 frames, flow_masks, masks_dilated = frames.half(), flow_masks.half(), masks_dilated.half()
@@ -265,7 +322,7 @@ class VideoInpaint:
 
                     pred_flows_f.append(pred_flows_bi_sub[0][:, pad_len_s:e_f - s_f - pad_len_e])
                     pred_flows_b.append(pred_flows_bi_sub[1][:, pad_len_s:e_f - s_f - pad_len_e])
-                    torch.cuda.empty_cache()
+                    self._empty_cache()
 
                 pred_flows_f = torch.cat(pred_flows_f, dim=1)
                 pred_flows_b = torch.cat(pred_flows_b, dim=1)
@@ -273,7 +330,7 @@ class VideoInpaint:
             else:
                 pred_flows_bi, _ = fix_flow_complete.forward_bidirect_flow(gt_flows_bi, flow_masks)
                 pred_flows_bi = fix_flow_complete.combine_flow(gt_flows_bi, pred_flows_bi, flow_masks)
-                torch.cuda.empty_cache()
+                self._empty_cache()
 
             # ---- image propagation ----
             masked_frames = frames * (1 - masks_dilated)
@@ -298,7 +355,7 @@ class VideoInpaint:
                     updated_masks_sub = updated_local_masks_sub.view(b, t, 1, h, w)
                     updated_frames.append(updated_frames_sub[:, pad_len_s:e_f - s_f - pad_len_e])
                     updated_masks.append(updated_masks_sub[:, pad_len_s:e_f - s_f - pad_len_e])
-                    torch.cuda.empty_cache()
+                    self._empty_cache()
 
                 updated_frames = torch.cat(updated_frames, dim=1)
                 updated_masks = torch.cat(updated_masks, dim=1)
@@ -308,7 +365,7 @@ class VideoInpaint:
                                                                        'nearest')
                 updated_frames = frames * (1 - masks_dilated) + prop_imgs.view(b, t, 3, h, w) * masks_dilated
                 updated_masks = updated_local_masks.view(b, t, 1, h, w)
-                torch.cuda.empty_cache()
+                self._empty_cache()
 
         ori_frames = frames_inp
         comp_frames = [None] * video_length
@@ -350,7 +407,7 @@ class VideoInpaint:
                     else:
                         comp_frames[idx] = comp_frames[idx].astype(np.float32) * 0.5 + img.astype(np.float32) * 0.5
                     comp_frames[idx] = comp_frames[idx].astype(np.uint8)
-            torch.cuda.empty_cache()
+            self._empty_cache()
         # save videos frame
         comp_frames = [cv2.cvtColor(i, cv2.COLOR_RGB2BGR) for i in comp_frames]
         return comp_frames
