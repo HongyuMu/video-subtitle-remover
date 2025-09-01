@@ -36,6 +36,7 @@ from backend.models import ModelManager
 import queue
 from threading import Thread
 from backend.inpaint.video_inpaint import inpaint_worker
+import numpy as np
 
 
 class SubtitleDetect:
@@ -870,7 +871,8 @@ class SubtitleRemover:
             pass
             
         manager = multiprocessing.Manager()
-        task_queue = manager.Queue()
+        # Create a task queue for each GPU
+        task_queues = [manager.Queue() for _ in config.DEVICES]
         result_queue = manager.Queue()
 
         # Group frames by interval
@@ -895,7 +897,8 @@ class SubtitleRemover:
         
         self.video_cap.release() # Release cap after reading all frames
 
-        # Create and enqueue tasks
+        # Create tasks
+        tasks = []
         total_inpaint_frames = 0
         for i, (start, end) in enumerate(intervals):
             frames_to_process = [f for _, f in frames_by_interval[i]]
@@ -905,23 +908,42 @@ class SubtitleRemover:
             total_inpaint_frames += len(frames_to_process)
             xmin, xmax, ymin, ymax = coords[i]
             mask = create_mask(self.mask_size, [(xmin, xmax, ymin, ymax)])
-            task_queue.put((i, frames_to_process, mask))
+            # Add task metadata (size, etc.) for smarter scheduling
+            tasks.append({'interval_idx': i, 'frames': frames_to_process, 'mask': mask, 'frame_count': len(frames_to_process)})
+
+        # Sort tasks by frame count descending for better initial distribution
+        tasks.sort(key=lambda x: x['frame_count'], reverse=True)
         
-                 # Start worker processes
+        # Start worker processes
         num_workers = len(config.DEVICES)
         workers = []
         for i in range(num_workers):
             gpu_id = config.DEVICES[i].index
             worker_process = multiprocessing.Process(
                 target=inpaint_worker,
-                args=(task_queue, result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
+                args=(task_queues[i], result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
             )
             workers.append(worker_process)
             worker_process.start()
-         
+
+        # Dynamic task allocation based on GPU memory
+        for task in tasks:
+            # Find the GPU with the most free memory
+            # This is a simplified proxy for availability; a more complex system might track active tasks
+            gpu_mem_free = []
+            for i in range(num_workers):
+                gpu_id = config.DEVICES[i].index
+                torch.cuda.set_device(gpu_id)
+                # Use reserved memory as a proxy for current load
+                gpu_mem_free.append(torch.cuda.mem_get_info()[0])
+            
+            best_gpu_idx = np.argmax(gpu_mem_free)
+            print(f"Dispatching task for interval {task['interval_idx']} to GPU {config.DEVICES[best_gpu_idx].index} (Free: {gpu_mem_free[best_gpu_idx]/1024**2:.2f}MB)")
+            task_queues[best_gpu_idx].put((task['interval_idx'], task['frames'], task['mask']))
+
         # Send sentinels to signal workers to stop
-        for _ in range(num_workers):
-            task_queue.put(None)
+        for i in range(num_workers):
+            task_queues[i].put(None)
 
         # Collect results
         self.set_stage('inpaint', total_inpaint_frames, tbar)

@@ -44,6 +44,11 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             interval_idx, frames_np, mask_np = task
             print(f"[Worker-{gpu_id}] Processing interval {interval_idx} with {len(frames_np)} frames.")
             
+            # Add runtime GPU memory debugging
+            allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
+            reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
+            print(f"[Worker-{gpu_id}] GPU Memory - Allocated: {allocated_mem:.2f} MB, Reserved: {reserved_mem:.2f} MB")
+
             # Convert numpy arrays to PIL Images for the inpaint function
             frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_np]
             
@@ -244,6 +249,10 @@ class VideoInpaint:
         # Validate inputs
         if not frames:
             raise ValueError("No frames provided for inpainting")
+        
+        if len(frames) < 2:
+            print("Warning: Less than 2 frames provided, skipping inpainting.")
+            return [cv2.cvtColor(np.array(f), cv2.COLOR_RGB2BGR) for f in frames]
             
         size = frames[0].size
         frames_len = len(frames)
