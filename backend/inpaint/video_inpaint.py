@@ -32,6 +32,10 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             torch.cuda.set_device(gpu_id)
         except Exception:
             pass
+
+        # Add initial GPU memory debugging
+        free_mem, total_mem = torch.cuda.mem_get_info(gpu_id)
+        print(f"[Worker-{gpu_id}] Initial GPU Memory - Free: {free_mem / 1024**2:.2f} MB / Total: {total_mem / 1024**2:.2f} MB")
         
         # Each worker needs its own model instance on its assigned GPU
         video_inpaint = VideoInpaint(sub_video_length=sub_video_length, use_fp16=use_fp16, gpu_id=gpu_id)
@@ -49,15 +53,14 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
             print(f"[Worker-{gpu_id}] GPU Memory - Allocated: {allocated_mem:.2f} MB, Reserved: {reserved_mem:.2f} MB")
 
-            # Convert numpy arrays to PIL Images for the inpaint function
+            # The frames received are numpy arrays in BGR format.
+            # The inpaint function expects a list of PIL Images in RGB format.
             frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_np]
             
-            inpainted_frames = video_inpaint.inpaint(frames, mask_np)
+            inpainted_frames_bgr = video_inpaint.inpaint(frames, mask_np)
             
-            # Convert back to numpy for pickling
-            inpainted_frames_np = [cv2.cvtColor(f, cv2.COLOR_RGB2BGR) for f in inpainted_frames]
-            
-            result_queue.put((interval_idx, inpainted_frames_np, gpu_id))
+            # Pass through BGR numpy frames directly for writing
+            result_queue.put((interval_idx, inpainted_frames_bgr, gpu_id))
             print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
 
     except Exception as e:

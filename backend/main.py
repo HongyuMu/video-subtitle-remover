@@ -14,6 +14,7 @@ from collections import namedtuple
 from Levenshtein import ratio
 import pysrt
 from backend.tools.ocr import get_ocr_recogniser, get_coordinates
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -977,7 +978,9 @@ class SubtitleRemover:
         for frame_no in range(1, self.frame_count + 1):
             frame_to_write = inpainted_results.get(frame_no, original_frames_map.get(frame_no))
             if frame_to_write is not None:
-                self.video_writer.write(frame_to_write)
+                # Ensure the frame is in BGR format for writing
+                if frame_to_write.shape[2] == 3:  # Check if it's a color image
+                    self.video_writer.write(frame_to_write)
             self.update_progress(tbar, 1)
 
     def propainter_mode_single_gpu(self, tbar):
@@ -1059,7 +1062,9 @@ class SubtitleRemover:
                 inpainted_frame = self.lama_inpaint(batch[0], mask)
                 self.write_queue.put((-1, inpainted_frame)) # Frame number is not critical here
             else:
-                inpainted_frames = self.video_inpaint.inpaint(batch, mask)
+                # The inpaint function now expects RGB PIL Images and returns BGR numpy arrays
+                batch_rgb_pil = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in batch]
+                inpainted_frames = self.video_inpaint.inpaint(batch_rgb_pil, mask)
                 for i, inpainted_frame in enumerate(inpainted_frames):
                     self.write_queue.put((-1, inpainted_frame))
                     if self.gui_mode:
