@@ -57,7 +57,7 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             # Convert back to numpy for pickling
             inpainted_frames_np = [cv2.cvtColor(f, cv2.COLOR_RGB2BGR) for f in inpainted_frames]
             
-            result_queue.put((interval_idx, inpainted_frames_np))
+            result_queue.put((interval_idx, inpainted_frames_np, gpu_id))
             print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
 
     except Exception as e:
