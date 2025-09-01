@@ -47,7 +47,7 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
                 break
                 
             interval_idx, frames_np, mask_np = task
-            print(f"[Worker-{gpu_id}] Processing interval {interval_idx} with {len(frames_np)} frames.")
+            print(f"[Worker-{gpu_id}] Received task: interval {interval_idx} with {len(frames_np)} frames.")
             
             # Add runtime GPU memory debugging
             allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
@@ -69,7 +69,7 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             
             # Pass through BGR numpy frames directly for writing
             result_queue.put((interval_idx, inpainted_frames_bgr_all, gpu_id))
-            print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
+            print(f"[Worker-{gpu_id}] Finished interval {interval_idx}. Remaining mem: {total_mem - free_mem / 1024**2:.2f} MB")
 
     except Exception as e:
         print(f"[Worker-{gpu_id}] Error: {e}")
