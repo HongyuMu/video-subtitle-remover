@@ -14,6 +14,7 @@ from backend.inpaint.video.model.recurrent_flow_completion import RecurrentFlowC
 from backend.inpaint.video.model.propainter import InpaintGenerator
 from backend.inpaint.video.core.utils import to_tensors
 from backend.inpaint.video.model.misc import get_device
+from backend.tools.inpaint_tools import batch_generator
 
 import warnings
 
@@ -53,14 +54,21 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
             print(f"[Worker-{gpu_id}] GPU Memory - Allocated: {allocated_mem:.2f} MB, Reserved: {reserved_mem:.2f} MB")
 
-            # The frames received are numpy arrays in BGR format.
-            # The inpaint function expects a list of PIL Images in RGB format.
-            frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in frames_np]
-            
-            inpainted_frames_bgr = video_inpaint.inpaint(frames, mask_np)
+            # Process in batches to avoid OOM on long intervals
+            inpainted_frames_bgr_all = []
+            for batch_idx, batch_np in enumerate(batch_generator(frames_np, config.PROPAINTER_MAX_LOAD_NUM)):
+                print(f"[Worker-{gpu_id}] Interval {interval_idx}: processing batch {batch_idx+1} with {len(batch_np)} frames...")
+                # Convert BGR numpy to RGB PIL for the inpaint function
+                frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in batch_np]
+                batch_out_bgr = video_inpaint.inpaint(frames, mask_np)
+                inpainted_frames_bgr_all.extend(batch_out_bgr)
+                # Log after batch
+                allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
+                reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
+                print(f"[Worker-{gpu_id}] Post-batch mem - Alloc: {allocated_mem:.2f} MB, Reserv: {reserved_mem:.2f} MB")
             
             # Pass through BGR numpy frames directly for writing
-            result_queue.put((interval_idx, inpainted_frames_bgr, gpu_id))
+            result_queue.put((interval_idx, inpainted_frames_bgr_all, gpu_id))
             print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
 
     except Exception as e:
