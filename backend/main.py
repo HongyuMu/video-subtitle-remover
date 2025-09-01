@@ -14,6 +14,7 @@ from collections import namedtuple
 from Levenshtein import ratio
 import pysrt
 from backend.tools.ocr import get_ocr_recogniser, get_coordinates
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -917,6 +918,7 @@ class SubtitleRemover:
         # Start worker processes
         num_workers = len(config.DEVICES)
         workers = []
+        gpu_id_to_queue_idx = {config.DEVICES[i].index: i for i in range(num_workers)}
         for i in range(num_workers):
             gpu_id = config.DEVICES[i].index
             worker_process = multiprocessing.Process(
@@ -926,55 +928,59 @@ class SubtitleRemover:
             workers.append(worker_process)
             worker_process.start()
 
-        # Dynamic task allocation based on GPU memory
-        for task in tasks:
-            # Find the GPU with the most free memory
-            # This is a simplified proxy for availability; a more complex system might track active tasks
-            gpu_mem_free = []
-            for i in range(num_workers):
-                gpu_id = config.DEVICES[i].index
-                torch.cuda.set_device(gpu_id)
-                # Use reserved memory as a proxy for current load
-                gpu_mem_free.append(torch.cuda.mem_get_info()[0])
-            
-            best_gpu_idx = np.argmax(gpu_mem_free)
-            print(f"Dispatching task for interval {task['interval_idx']} to GPU {config.DEVICES[best_gpu_idx].index} (Free: {gpu_mem_free[best_gpu_idx]/1024**2:.2f}MB)")
-            task_queues[best_gpu_idx].put((task['interval_idx'], task['frames'], task['mask']))
+        # --- Dynamic Dispatch Logic ---
+        tasks_to_dispatch = list(tasks)
+        
+        # Initial task dispatch
+        for i in range(min(num_workers, len(tasks_to_dispatch))):
+            task = tasks_to_dispatch.pop(0)
+            print(f"Initially dispatching task for interval {task['interval_idx']} to GPU {config.DEVICES[i].index}")
+            task_queues[i].put((task['interval_idx'], task['frames'], task['mask']))
+
+        # Collect results and dispatch remaining tasks
+        self.set_stage('inpaint', total_inpaint_frames, tbar)
+        inpainted_results = {}
+        
+        processed_tasks = 0
+        while processed_tasks < len(tasks):
+            try:
+                interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=30)
+                
+                original_frame_nos = [no for no, _ in frames_by_interval[interval_idx]]
+                inpainted_results.update(zip(original_frame_nos, inpainted_frames))
+                
+                self.update_progress(tbar, len(inpainted_frames))
+                processed_tasks += 1
+
+                # Dispatch next task to the worker that just finished
+                if tasks_to_dispatch:
+                    task = tasks_to_dispatch.pop(0)
+                    queue_idx = gpu_id_to_queue_idx[gpu_id]
+                    print(f"Dispatching next task for interval {task['interval_idx']} to newly free GPU {gpu_id}")
+                    task_queues[queue_idx].put((task['interval_idx'], task['frames'], task['mask']))
+
+            except queue.Empty:
+                print("Result queue is empty, waiting for workers...")
+                if all(not w.is_alive() for w in workers):
+                    print("All workers have exited unexpectedly.")
+                    break
+                continue
 
         # Send sentinels to signal workers to stop
         for i in range(num_workers):
             task_queues[i].put(None)
 
-        # Collect results
-        self.set_stage('inpaint', total_inpaint_frames, tbar)
-        inpainted_results = {}
-        processed_frames_count = 0
-        for _ in range(len(intervals)):
-            if all(not w.is_alive() for w in workers) and result_queue.empty():
-                break
-            try:
-                interval_idx, inpainted_frames = result_queue.get(timeout=10)
-                
-                original_frame_nos = [no for no, _ in frames_by_interval[interval_idx]]
-                inpainted_results.update(zip(original_frame_nos, inpainted_frames))
-                
-                processed_frames_count += len(inpainted_frames)
-                self.update_progress(tbar, len(inpainted_frames))
-
-            except queue.Empty:
-                continue
-
         for worker in workers:
             worker.join(timeout=10)
-            if worker.is_alive():
-                worker.terminate()
 
         # Write final video
         self.set_stage('write', self.frame_count, tbar)
         for frame_no in range(1, self.frame_count + 1):
             frame_to_write = inpainted_results.get(frame_no, original_frames_map.get(frame_no))
             if frame_to_write is not None:
-                self.video_writer.write(frame_to_write)
+                # Ensure the frame is in BGR format for writing
+                if frame_to_write.shape[2] == 3:  # Check if it's a color image
+                    self.video_writer.write(frame_to_write)
             self.update_progress(tbar, 1)
 
     def propainter_mode_single_gpu(self, tbar):
@@ -1056,7 +1062,9 @@ class SubtitleRemover:
                 inpainted_frame = self.lama_inpaint(batch[0], mask)
                 self.write_queue.put((-1, inpainted_frame)) # Frame number is not critical here
             else:
-                inpainted_frames = self.video_inpaint.inpaint(batch, mask)
+                # The inpaint function now expects RGB PIL Images and returns BGR numpy arrays
+                batch_rgb_pil = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in batch]
+                inpainted_frames = self.video_inpaint.inpaint(batch_rgb_pil, mask)
                 for i, inpainted_frame in enumerate(inpainted_frames):
                     self.write_queue.put((-1, inpainted_frame))
                     if self.gui_mode:
