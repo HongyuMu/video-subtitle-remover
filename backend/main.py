@@ -933,19 +933,24 @@ class SubtitleRemover:
         print(f"[Dispatcher] Total tasks: {len(tasks_to_dispatch)}, Workers: {num_workers}")
         
         # Initial task dispatch
+        outstanding = 0
         for i in range(min(num_workers, len(tasks_to_dispatch))):
             task = tasks_to_dispatch.pop(0)
             print(f"Initially dispatching task for interval {task['interval_idx']} to GPU {config.DEVICES[i].index}")
             task_queues[i].put((task['interval_idx'], task['frames'], task['mask']))
-        print(f"[Dispatcher] After initial dispatch, remaining tasks: {len(tasks_to_dispatch)}")
+            outstanding += 1
+        print(f"[Dispatcher] After initial dispatch, remaining tasks: {len(tasks_to_dispatch)}, outstanding: {outstanding}")
 
         # Collect results and dispatch remaining tasks
         self.set_stage('inpaint', total_inpaint_frames, tbar)
         inpainted_results = {}
         
-        processed_tasks = 0
         idle_poll_cycles = 0
-        while processed_tasks < len(tasks):
+        while True:
+            # Exit condition: nothing running and nothing left to dispatch
+            if outstanding == 0 and not tasks_to_dispatch:
+                print("[Dispatcher] All tasks completed. Proceeding to writing stage.")
+                break
             try:
                 interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=30)
                 print(f"[Dispatcher] Got result from GPU {gpu_id} for interval {interval_idx} (frames: {len(inpainted_frames)}).")
@@ -954,8 +959,8 @@ class SubtitleRemover:
                 inpainted_results.update(zip(original_frame_nos, inpainted_frames))
                 
                 self.update_progress(tbar, len(inpainted_frames))
-                processed_tasks += 1
                 idle_poll_cycles = 0
+                outstanding = max(0, outstanding - 1)
 
                 # Dispatch next task to the worker that just finished
                 if tasks_to_dispatch:
@@ -963,22 +968,17 @@ class SubtitleRemover:
                     queue_idx = gpu_id_to_queue_idx[gpu_id]
                     print(f"Dispatching next task for interval {task['interval_idx']} to newly free GPU {gpu_id}. Remaining tasks: {len(tasks_to_dispatch)}")
                     task_queues[queue_idx].put((task['interval_idx'], task['frames'], task['mask']))
+                    outstanding += 1
                 else:
                     print("[Dispatcher] No remaining tasks to dispatch.")
 
             except queue.Empty:
                 idle_poll_cycles += 1
-                print(f"[Dispatcher] Result queue empty (cycle {idle_poll_cycles}). Checking workers and queues...")
-                all_dead = all(not w.is_alive() for w in workers)
-                if all_dead:
-                    print("[Dispatcher] All workers are dead while tasks remain. Breaking.")
+                print(f"[Dispatcher] Result queue empty (cycle {idle_poll_cycles}). Outstanding: {outstanding}, Remaining: {len(tasks_to_dispatch)}")
+                # Optional: if idle for long and nothing outstanding, break defensively
+                if outstanding == 0 and not tasks_to_dispatch and idle_poll_cycles >= 2:
+                    print("[Dispatcher] No outstanding work and no tasks after idle wait. Breaking.")
                     break
-                # Print per-queue approximate size (Manager.Queue may not support qsize reliably on some platforms)
-                try:
-                    for i, q in enumerate(task_queues):
-                        print(f"[Dispatcher] Queue {i} (GPU {config.DEVICES[i].index}) may have pending items.")
-                except Exception:
-                    pass
                 continue
 
         # Send sentinels to signal workers to stop
