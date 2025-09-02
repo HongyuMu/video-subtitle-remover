@@ -374,6 +374,46 @@ async def adjust_box(task_id: str, req: AdjustSubtitleBoxRequest):
     }
 
 
+# Merge or discard tiny intervals
+def discard_or_merge_short_intervals(intervals, coords, min_len: int = config.MIN_INTERVAL_LEN):
+    """
+    Merge short intervals into neighbors with similar coordinates; otherwise discard them.
+    intervals: List[(start, end)] (1-based inclusive)
+    coords: List[(xmin, xmax, ymin, ymax)] aligned with intervals
+    Returns filtered (intervals, coords)
+    """
+    if not intervals or not coords:
+        return intervals, coords
+
+    new_intervals = []
+    new_coords = []
+    i = 0
+    n = len(intervals)
+    while i < n:
+        start, end = intervals[i]
+        box = coords[i]
+        length = max(0, end - start + 1)
+        if length >= min_len:
+            new_intervals.append((start, end))
+            new_coords.append(box)
+            i += 1
+            continue
+        # Try merge with previous if similar
+        merged = False
+        if new_intervals and SubtitleDetect.are_similar(new_coords[-1], box):
+            prev_s, prev_e = new_intervals[-1]
+            new_intervals[-1] = (prev_s, max(prev_e, end))
+            merged = True
+        # Else try merge with next if similar (expand next to include this)
+        elif i + 1 < n and SubtitleDetect.are_similar(box, coords[i + 1]):
+            next_s, next_e = intervals[i + 1]
+            intervals[i + 1] = (min(start, next_s), next_e)
+            merged = True
+        # If not merged into neighbors, drop it by not appending
+        i += 1
+    return new_intervals, new_coords
+
+
 def generate_subtitle_task(
     task_id: str, 
     video_path: str, 
@@ -455,6 +495,9 @@ def generate_subtitle_task(
                     # coordinate_str is like '(517, 763, 1007, 1027)', so we parse it
                     coords = tuple(map(int, coordinate_str.strip('()').split(', ')))
                     new_distinct_coords.append(coords)
+                
+                # Merge or drop 1-3 frame intervals
+                new_frame_intervals, new_distinct_coords = discard_or_merge_short_intervals(new_frame_intervals, new_distinct_coords)
                 
                 TASK_RESULTS[task_id]['frame_intervals'] = new_frame_intervals
                 TASK_RESULTS[task_id]['distinct_coords'] = new_distinct_coords

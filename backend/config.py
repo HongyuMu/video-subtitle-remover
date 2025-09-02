@@ -383,6 +383,8 @@ DEBUG_OCR_LOSS = False
 THRESHOLD_TEXT_SIMILARITY = 0.8
 # How many frames to grab per second for OCR
 EXTRACT_FREQUENCY = 3
+# Intervals shorter than this will be merged or dropped
+MIN_INTERVAL_LEN = 4
 # ×××××××××× OCR Settings end ××××××××××
 
 # 【设置像素点偏差】
