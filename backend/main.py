@@ -965,7 +965,9 @@ class SubtitleRemover:
                 print("[Dispatcher] All tasks completed. Proceeding to writing stage.")
                 break
             try:
-                interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=30)
+                # Use a longer timeout while there are outstanding intervals to avoid busy polling
+                dynamic_timeout = 120 if outstanding > 0 else 30
+                interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=dynamic_timeout)
                 print(f"[Dispatcher] Got result from GPU {gpu_id} for interval {interval_idx} (frames: {len(inpainted_frames)}).")
                 
                 # Guard against duplicate/stale results from re-dispatched intervals
@@ -1006,41 +1008,54 @@ class SubtitleRemover:
 
             except queue.Empty:
                 idle_poll_cycles += 1
-                print(f"[Dispatcher] Result queue empty (cycle {idle_poll_cycles}). Outstanding: {outstanding}, Remaining: {len(tasks_to_dispatch)}")
+                # Throttle empty-queue logs to avoid noisy output while workers are running
+                if idle_poll_cycles % 3 == 1:
+                    print(f"[Dispatcher] Result queue empty (cycle {idle_poll_cycles}). Outstanding: {outstanding}, Remaining: {len(tasks_to_dispatch)}")
                 # If some tasks are still outstanding but no tasks remain to dispatch, a worker may have died.
                 if outstanding != 0 and not tasks_to_dispatch and idle_poll_cycles >= 2:
-                    # Find GPUs with assigned work that are no longer alive
-                    reassigned = False
+                    # Identify all lost intervals and all idle GPUs, then assign in parallel
+                    lost_intervals = []
+                    dead_gpu_ids = []
                     for i, worker in enumerate(workers):
                         gpu_id = config.DEVICES[i].index
                         if assigned_by_gpu[gpu_id] is not None and not worker.is_alive():
-                            lost_interval = assigned_by_gpu[gpu_id]
-                            print(f"[Dispatcher] Detected dead worker on GPU {gpu_id} with outstanding interval {lost_interval}. Reassigning...")
-                            # choose quietest alive GPU
-                            try:
-                                free_list = []
-                                for j, w in enumerate(workers):
-                                    if w.is_alive():
-                                        dev_id = config.DEVICES[j].index
+                            lost_intervals.append(assigned_by_gpu[gpu_id])
+                            dead_gpu_ids.append(gpu_id)
+                    if lost_intervals:
+                        print(f"[Dispatcher] Detected dead workers: GPUs {dead_gpu_ids} with intervals {lost_intervals}. Reassigning...")
+                        try:
+                            # Build list of available GPUs (alive and idle), sorted by free memory desc
+                            free_list = []
+                            for j, w in enumerate(workers):
+                                if w.is_alive():
+                                    dev_id = config.DEVICES[j].index
+                                    if assigned_by_gpu.get(dev_id) is None:
                                         free_mem, total_mem = torch.cuda.mem_get_info(dev_id)
                                         free_list.append((free_mem, dev_id, j))
-                                if not free_list:
-                                    print("[Dispatcher] No alive GPUs available to reassign.")
-                                    break
+                            if not free_list:
+                                print("[Dispatcher] No idle alive GPUs available to reassign right now.")
+                            else:
                                 free_list.sort(reverse=True)
-                                _, best_gpu, best_idx = free_list[0]
-                                task = task_map[lost_interval]
-                                # Update ownership to the new GPU before re-dispatch
-                                assigned_by_gpu[gpu_id] = None
-                                interval_to_gpu[lost_interval] = best_gpu
-                                task_queues[best_idx].put((task['interval_idx'], task['frames'], task['mask']))
-                                assigned_by_gpu[best_gpu] = task['interval_idx']
-                                # Consider the lost task replaced; outstanding stays the same
-                                reassigned = True
+                                # Assign as many lost intervals as we have idle GPUs
+                                num_to_assign = min(len(lost_intervals), len(free_list))
+                                for k in range(num_to_assign):
+                                    interval_k = lost_intervals[k]
+                                    _, best_gpu, best_idx = free_list[k]
+                                    task = task_map[interval_k]
+                                    # Clear old owner and set new ownership
+                                    # remove mapping from previous dead GPU if present
+                                    interval_to_gpu[interval_k] = best_gpu
+                                    # mark all dead gpu ownerships cleared once
+                                    for dg in dead_gpu_ids:
+                                        if assigned_by_gpu.get(dg) == interval_k:
+                                            assigned_by_gpu[dg] = None
+                                    task_queues[best_idx].put((task['interval_idx'], task['frames'], task['mask']))
+                                    assigned_by_gpu[best_gpu] = task['interval_idx']
+                                    print(f"[Dispatcher] Reassigned interval {interval_k} to GPU {best_gpu}.")
+                                # Keep outstanding unchanged; reset poll cycles
                                 idle_poll_cycles = 0
-                                print(f"[Dispatcher] Reassigned interval {lost_interval} to GPU {best_gpu}.")
-                            except Exception as e:
-                                print(f"[Dispatcher] Reassignment failed: {e}")
+                        except Exception as e:
+                            print(f"[Dispatcher] Parallel reassignment failed: {e}")
                 # Remove risky fallback that could duplicate assignments while workers are alive
                 continue
 
