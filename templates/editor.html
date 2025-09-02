@@ -313,6 +313,11 @@
         let universalBox = null; // Holds the state of the user-defined universal bounding box
         let isUniversalBoxMode = false; // Flag to enable universal box interaction
 
+        // Debug controls for box drawing
+        const DEBUG_BOXES = true;
+        let lastLoggedSrtIndex = -1;
+        let lastLoggedInterval = -1;
+
         // Helper function to disable controls during async operations like seeking
         function setControlsDisabled(disabled) {
             for (const key in sliders) {
@@ -598,6 +603,19 @@
             let boxToDraw = null;
             let activeIdx = -1;
 
+            // Prefer SRT-derived bounding boxes if available at current time
+            let srtBox = null;
+            let srtActiveIndex = -1;
+            if (parsedSubtitles && parsedSubtitles.length > 0) {
+                srtActiveIndex = parsedSubtitles.findIndex(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
+                if (srtActiveIndex !== -1) {
+                    const srtCoords = parsedSubtitles[srtActiveIndex].coords;
+                    if (srtCoords) {
+                        srtBox = { x: srtCoords.x, y: srtCoords.y, width: srtCoords.width, height: srtCoords.height };
+                    }
+                }
+            }
+
             if (isUniversalBoxMode && universalBox) {
                 boxToDraw = universalBox;
                 if (universalBoxCoordsEl) {
@@ -615,10 +633,21 @@
                 }
             }
 
-            // If we have a valid interval (either paused on one, or playing through one), get its coordinates
-            if (activeIdx !== -1 && intervals[activeIdx]) {
+            // If we have an SRT box for the exact current time, prefer it
+            if (srtBox) {
+                boxToDraw = srtBox;
+                if (DEBUG_BOXES && srtActiveIndex !== lastLoggedSrtIndex) {
+                    console.log(`[SRT-BOX] idx=${srtActiveIndex} coords=`, srtBox);
+                    lastLoggedSrtIndex = srtActiveIndex;
+                }
+            } else if (activeIdx !== -1 && intervals[activeIdx]) {
+                // Otherwise fall back to interval-level box
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
                 boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                if (DEBUG_BOXES && activeIdx !== lastLoggedInterval) {
+                    console.log(`[FALLBACK-INTERVAL] idx=${activeIdx} coords=`, boxToDraw);
+                    lastLoggedInterval = activeIdx;
+                }
             }
 
             if (boxToDraw) {
@@ -1092,12 +1121,12 @@
                 }
                 timeline.value = currentFrame;
                 currentFrameDisplay.textContent = `Frame: ${currentFrame + 1}`;
-                console.log(`[Video]`, currentFrame);
+                console.log(`[Video]`, currentFrame + 1);
                 
                 // When paused, if the frame has changed to a new interval, load it.
                 const activeIdx = findActiveInterval(currentFrame);
                 if (activeIdx !== -1 && activeIdx !== currentIntervalIdx) {
-                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame} (range [${intervals[activeIdx].frame_range[0]}, ${intervals[activeIdx].frame_range[1]}])`);
+                    console.log(`[Video]`, `Switched to interval ${activeIdx + 1}/${intervals.length} at frame ${currentFrame + 1} (range [${intervals[activeIdx].frame_range[0] + 1}, ${intervals[activeIdx].frame_range[1] + 1}])`);
                     loadInterval(activeIdx, true);
                 }
             }

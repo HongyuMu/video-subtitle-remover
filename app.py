@@ -312,6 +312,7 @@ async def show_subtitle_box(
 
     # Draw the boxes only if requested by the client
     if draw_box:
+        print(f"[Preview] frame_idx={frame_idx} intervals={len(frame_intervals)}")
         frame_with_boxes = draw_subtitle_boxes(frame, distinct_coords, frame_intervals, frame_idx)
     else:
         frame_with_boxes = frame
