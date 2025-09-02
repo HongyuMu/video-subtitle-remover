@@ -1614,6 +1614,34 @@ class SubtitleExtractor:
             if len(parts) == 3:
                 content_list.append(RawInfo(parts[0], parts[1], parts[2]))
 
+        def _parse_coord(coord_str):
+            try:
+                vals = coord_str.strip().strip('()').split(', ')
+                if len(vals) != 4:
+                    return None
+                xmin, xmax, ymin, ymax = map(int, vals)
+                return xmin, xmax, ymin, ymax
+            except Exception:
+                return None
+
+        def _union_coords(coord_strs):
+            xmin_u, ymin_u = float('inf'), float('inf')
+            xmax_u, ymax_u = float('-inf'), float('-inf')
+            any_valid = False
+            for s in coord_strs:
+                parsed = _parse_coord(s)
+                if parsed is None:
+                    continue
+                xmin, xmax, ymin, ymax = parsed
+                xmin_u = min(xmin_u, xmin)
+                xmax_u = max(xmax_u, xmax)
+                ymin_u = min(ymin_u, ymin)
+                ymax_u = max(ymax_u, ymax)
+                any_valid = True
+            if not any_valid:
+                return None
+            return f'({xmin_u}, {xmax_u}, {ymin_u}, {ymax_u})'
+
         unique_subtitle_list = []
         idx_i = 0
         while idx_i < len(content_list):
@@ -1628,8 +1656,11 @@ class SubtitleExtractor:
                     similar_list = content_list[idx_i:idx_j + 1]
                     # Find the longest text in the similar group to use as the subtitle
                     index, _ = max(enumerate([item.content.replace(' ', '') for item in similar_list]), key=lambda x: len(x[1]))
+                    # Union coordinates across the whole group to cover the full subtitle line
+                    union_coord = _union_coords([item.coordinate for item in similar_list])
+                    chosen_coord = union_coord if union_coord is not None else similar_list[index].coordinate
                     
-                    unique_subtitle_list.append((start_frame, end_frame, similar_list[index].coordinate, similar_list[index].content))
+                    unique_subtitle_list.append((start_frame, end_frame, chosen_coord, similar_list[index].content))
                     idx_i = idx_j + 1
                     break
                 else:
@@ -1652,13 +1683,37 @@ class SubtitleExtractor:
                     content_map[frame_no] = []
                 content_map[frame_no].append((coordinate, content))
 
+        def _parse_coord(coord_str):
+            try:
+                vals = coord_str.strip().strip('()').split(', ')
+                if len(vals) != 4:
+                    return None
+                xmin, xmax, ymin, ymax = map(int, vals)
+                return xmin, xmax, ymin, ymax
+            except Exception:
+                return None
+
         with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
             for frame_no, items in content_map.items():
                 if len(items) > 1:
-                    # For simplicity, we take the first coordinate and concatenate content
-                    coordinate = items[0][0]
-                    content = ' '.join([item[1] for item in items])
-                    f.write(f'{frame_no}\t{coordinate}\t{unicodedata.normalize("NFKC", content)}\n')
+                    # Compute union of all coordinates in this frame and concatenate text
+                    xmin_u, ymin_u = float('inf'), float('inf')
+                    xmax_u, ymax_u = float('-inf'), float('-inf')
+                    any_valid = False
+                    texts = []
+                    for coord_str, text in items:
+                        parsed = _parse_coord(coord_str)
+                        if parsed is not None:
+                            xmin, xmax, ymin, ymax = parsed
+                            xmin_u = min(xmin_u, xmin)
+                            xmax_u = max(xmax_u, xmax)
+                            ymin_u = min(ymin_u, ymin)
+                            ymax_u = max(ymax_u, ymax)
+                            any_valid = True
+                        texts.append(text)
+                    coordinate_out = f'({xmin_u}, {xmax_u}, {ymin_u}, {ymax_u})' if any_valid else items[0][0]
+                    content_out = ' '.join(texts)
+                    f.write(f'{frame_no}\t{coordinate_out}\t{unicodedata.normalize("NFKC", content_out)}\n')
                 else:
                     f.write(f'{frame_no}\t{items[0][0]}\t{unicodedata.normalize("NFKC", items[0][1])}\n')
 
