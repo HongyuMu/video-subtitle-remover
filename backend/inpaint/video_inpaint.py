@@ -48,12 +48,12 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
                 
             interval_idx, frames_np, mask_np = task
             print(f"[Worker-{gpu_id}] Received task: interval {interval_idx} with {len(frames_np)} frames.")
+            try:
+                free_now, total_now = torch.cuda.mem_get_info(gpu_id)
+                print(f"[Worker-{gpu_id}] Free mem after receiving task: {free_now / 1024**2:.2f} MB / {total_now / 1024**2:.2f} MB")
+            except Exception:
+                pass
             
-            # Add runtime GPU memory debugging
-            allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
-            reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
-            print(f"[Worker-{gpu_id}] GPU Memory - Allocated: {allocated_mem:.2f} MB, Reserved: {reserved_mem:.2f} MB")
-
             # Process in batches to avoid OOM on long intervals
             inpainted_frames_bgr_all = []
             for batch_idx, batch_np in enumerate(batch_generator(frames_np, config.PROPAINTER_MAX_LOAD_NUM)):
@@ -62,14 +62,19 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
                 frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in batch_np]
                 batch_out_bgr = video_inpaint.inpaint(frames, mask_np)
                 inpainted_frames_bgr_all.extend(batch_out_bgr)
-                # Log after batch
-                allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
-                reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
-                print(f"[Worker-{gpu_id}] Post-batch mem - Alloc: {allocated_mem:.2f} MB, Reserv: {reserved_mem:.2f} MB")
+                # # Log after batch
+                # allocated_mem = torch.cuda.memory_allocated(gpu_id) / 1024**2
+                # reserved_mem = torch.cuda.memory_reserved(gpu_id) / 1024**2
+                # print(f"[Worker-{gpu_id}] Post-batch mem - Alloc: {allocated_mem:.2f} MB, Reserv: {reserved_mem:.2f} MB")
             
             # Pass through BGR numpy frames directly for writing
             result_queue.put((interval_idx, inpainted_frames_bgr_all, gpu_id))
-            print(f"[Worker-{gpu_id}] Finished interval {interval_idx}. Remaining mem: {total_mem - free_mem / 1024**2:.2f} MB")
+            # Accurate remaining memory after finishing interval
+            try:
+                free_after, total_after = torch.cuda.mem_get_info(gpu_id)
+                print(f"[Worker-{gpu_id}] Finished interval {interval_idx}. Remaining mem: {free_after / 1024**2:.2f} MB / {total_after / 1024**2:.2f} MB")
+            except Exception:
+                print(f"[Worker-{gpu_id}] Finished interval {interval_idx}.")
 
     except Exception as e:
         print(f"[Worker-{gpu_id}] Error: {e}")
