@@ -4,6 +4,9 @@ import cv2
 import numpy as np
 import scipy.ndimage
 from PIL import Image
+import time
+import signal
+import os
 
 import torch
 import torchvision
@@ -20,13 +23,25 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
+should_terminate = False
+
+def _worker_signal_handler(signum, frame):
+    global should_terminate
+    should_terminate = True
+
 # Worker function for multiprocessing
-def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16):
+def inpaint_worker(task_queue, result_queue, heartbeat_queue, gpu_id, sub_video_length, use_fp16):
     """
     A worker process that initializes a VideoInpaint model on a specific GPU
     and processes video chunks from the task queue.
     """
     print(f"[Worker-{gpu_id}] Initializing on cuda:{gpu_id}")
+    # Install signal handlers for graceful termination
+    try:
+        signal.signal(signal.SIGTERM, _worker_signal_handler)
+        signal.signal(signal.SIGINT, _worker_signal_handler)
+    except Exception:
+        pass
     try:
         # Pin this process to the assigned GPU to avoid accidental cross-device ops
         try:
@@ -41,7 +56,11 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
         # Each worker needs its own model instance on its assigned GPU
         video_inpaint = VideoInpaint(sub_video_length=sub_video_length, use_fp16=use_fp16, gpu_id=gpu_id)
         
+        last_hb_ts = time.time()
         while True:
+            if should_terminate:
+                print(f"[Worker-{gpu_id}] Termination requested. Exiting loop before fetching new task.")
+                break
             task = task_queue.get()
             if task is None:  # Sentinel value to stop the worker
                 break
@@ -58,6 +77,14 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
             inpainted_frames_bgr_all = []
             for batch_idx, batch_np in enumerate(batch_generator(frames_np, config.PROPAINTER_MAX_LOAD_NUM)):
                 print(f"[Worker-{gpu_id}] Interval {interval_idx}: processing batch {batch_idx+1} with {len(batch_np)} frames...")
+                # Emit heartbeat at start of each batch
+                try:
+                    heartbeat_queue.put(("hb", gpu_id, time.time(), interval_idx, batch_idx+1))
+                except Exception:
+                    pass
+                if should_terminate:
+                    print(f"[Worker-{gpu_id}] Termination requested during processing. Aborting interval {interval_idx}.")
+                    break
                 # Convert BGR numpy to RGB PIL for the inpaint function
                 frames = [Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB)) for f in batch_np]
                 batch_out_bgr = video_inpaint.inpaint(frames, mask_np)
@@ -68,7 +95,12 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
                 # print(f"[Worker-{gpu_id}] Post-batch mem - Alloc: {allocated_mem:.2f} MB, Reserv: {reserved_mem:.2f} MB")
             
             # Pass through BGR numpy frames directly for writing
-            result_queue.put((interval_idx, inpainted_frames_bgr_all, gpu_id))
+            try:
+                result_queue.put((interval_idx, inpainted_frames_bgr_all, gpu_id))
+            except Exception:
+                # If result cannot be put, exit to avoid hanging
+                print(f"[Worker-{gpu_id}] Failed to put result for interval {interval_idx}. Exiting early.")
+                break
             # Accurate remaining memory after finishing interval
             try:
                 free_after, total_after = torch.cuda.mem_get_info(gpu_id)
@@ -81,6 +113,11 @@ def inpaint_worker(task_queue, result_queue, gpu_id, sub_video_length, use_fp16)
         import traceback
         traceback.print_exc()
     finally:
+        # Best-effort cleanup to release GPU memory
+        try:
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
         print(f"[Worker-{gpu_id}] Exiting.")
 
 

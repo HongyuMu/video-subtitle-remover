@@ -385,6 +385,8 @@ THRESHOLD_TEXT_SIMILARITY = 0.8
 EXTRACT_FREQUENCY = 3
 # Intervals shorter than this will be merged or dropped
 MIN_INTERVAL_LEN = 4
+# Heartbeat timeout in seconds for worker processes
+HEARTBEAT_TIMEOUT = 180
 # ×××××××××× OCR Settings end ××××××××××
 
 # 【设置像素点偏差】
