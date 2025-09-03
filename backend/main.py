@@ -30,6 +30,7 @@ import importlib
 import platform
 import tempfile
 import multiprocessing
+import signal
 from shapely.geometry import Polygon
 import time
 from tqdm import tqdm
@@ -871,10 +872,12 @@ class SubtitleRemover:
             # if this function is called multiple times.
             pass
             
-        manager = multiprocessing.Manager()
+        # Prefer spawn context queues to reduce Manager-related hangs
+        ctx = multiprocessing.get_context("spawn")
         # Create a task queue for each GPU
-        task_queues = [manager.Queue() for _ in config.DEVICES]
-        result_queue = manager.Queue()
+        task_queues = [ctx.Queue() for _ in config.DEVICES]
+        result_queue = ctx.Queue()
+        heartbeat_queue = ctx.Queue()
 
         # Group frames by interval
         intervals = self.frame_intervals
@@ -926,8 +929,9 @@ class SubtitleRemover:
             gpu_id = config.DEVICES[i].index
             worker_process = multiprocessing.Process(
                 target=inpaint_worker,
-                args=(task_queues[i], result_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
+                args=(task_queues[i], result_queue, heartbeat_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
             )
+            worker_process.daemon = True
             workers.append(worker_process)
             worker_process.start()
 
@@ -959,15 +963,25 @@ class SubtitleRemover:
         inpainted_results = {}
         
         idle_poll_cycles = 0
+        # Heartbeat tracking
+        last_heartbeat = {config.DEVICES[i].index: time.time() for i in range(num_workers)}
+        
         while True:
             # Exit condition: nothing running and nothing left to dispatch
             if outstanding == 0 and not tasks_to_dispatch:
                 print("[Dispatcher] All tasks completed. Proceeding to writing stage.")
                 break
             try:
-                # Use a longer timeout while there are outstanding intervals to avoid busy polling
-                dynamic_timeout = 120 if outstanding > 0 else 30
-                interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=dynamic_timeout)
+                # Drain heartbeats frequently
+                try:
+                    while True:
+                        tag, hb_gpu_id, hb_ts, hb_interval, hb_batch = heartbeat_queue.get_nowait()
+                        if tag == "hb":
+                            last_heartbeat[hb_gpu_id] = hb_ts
+                except Exception:
+                    pass
+                # Moderate timeout, so we can keep heartbeats checked
+                interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=10)
                 print(f"[Dispatcher] Got result from GPU {gpu_id} for interval {interval_idx} (frames: {len(inpainted_frames)}).")
                 
                 # Guard against duplicate/stale results from re-dispatched intervals
@@ -1011,11 +1025,30 @@ class SubtitleRemover:
                 # Throttle empty-queue logs to avoid noisy output while workers are running
                 if idle_poll_cycles % 3 == 1:
                     print(f"[Dispatcher] Result queue empty (cycle {idle_poll_cycles}). Outstanding: {outstanding}, Remaining: {len(tasks_to_dispatch)}")
+                # Detect hung workers via heartbeat timeouts and mark their intervals lost
+                lost_intervals = []
+                dead_gpu_ids = []
+                now_ts = time.time()
+                for i, worker in enumerate(workers):
+                    gpu_id = config.DEVICES[i].index
+                    owned_interval = assigned_by_gpu.get(gpu_id)
+                    if owned_interval is None:
+                        continue
+                    if worker.is_alive() and (now_ts - last_heartbeat.get(gpu_id, 0) > config.HEARTBEAT_TIMEOUT):
+                        print(f"[Dispatcher] GPU {gpu_id} heartbeat timeout on interval {owned_interval}. Terminating...")
+                        try:
+                            worker.terminate()
+                        except Exception:
+                            pass
+                        try:
+                            os.kill(worker.pid, signal.SIGKILL)
+                        except Exception:
+                            pass
+                        lost_intervals.append(owned_interval)
+                        dead_gpu_ids.append(gpu_id)
                 # If some tasks are still outstanding but no tasks remain to dispatch, a worker may have died.
-                if outstanding != 0 and not tasks_to_dispatch and idle_poll_cycles >= 2:
+                if outstanding != 0 and not tasks_to_dispatch and (idle_poll_cycles >= 2 or lost_intervals):
                     # Identify all lost intervals and all idle GPUs, then assign in parallel
-                    lost_intervals = []
-                    dead_gpu_ids = []
                     for i, worker in enumerate(workers):
                         gpu_id = config.DEVICES[i].index
                         if assigned_by_gpu[gpu_id] is not None and not worker.is_alive():
@@ -1051,6 +1084,7 @@ class SubtitleRemover:
                                             assigned_by_gpu[dg] = None
                                     task_queues[best_idx].put((task['interval_idx'], task['frames'], task['mask']))
                                     assigned_by_gpu[best_gpu] = task['interval_idx']
+                                    last_heartbeat[best_gpu] = time.time()
                                     print(f"[Dispatcher] Reassigned interval {interval_k} to GPU {best_gpu}.")
                                 # Keep outstanding unchanged; reset poll cycles
                                 idle_poll_cycles = 0
