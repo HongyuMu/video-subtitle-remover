@@ -603,7 +603,7 @@
             let boxToDraw = null;
             let activeIdx = -1;
 
-            // Prefer SRT-derived bounding boxes if available at current time
+            // Capture SRT-derived bounding box if available at current time (used only as fallback)
             let srtBox = null;
             let srtActiveIndex = -1;
             if (parsedSubtitles && parsedSubtitles.length > 0) {
@@ -633,20 +633,20 @@
                 }
             }
 
-            // If we have an SRT box for the exact current time, prefer it
-            if (srtBox) {
-                boxToDraw = srtBox;
-                if (DEBUG_BOXES && srtActiveIndex !== lastLoggedSrtIndex) {
-                    console.log(`[SRT-BOX] idx=${srtActiveIndex} coords=`, srtBox);
-                    lastLoggedSrtIndex = srtActiveIndex;
-                }
-            } else if (activeIdx !== -1 && intervals[activeIdx]) {
+            // Prefer the interval-level box while editing; fall back to SRT-visible box only if no interval is active
+            if (activeIdx !== -1 && intervals[activeIdx]) {
                 // Otherwise fall back to interval-level box
                 const [xmin, xmax, ymin, ymax] = intervals[activeIdx].coords;
                 boxToDraw = { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
                 if (DEBUG_BOXES && activeIdx !== lastLoggedInterval) {
                     console.log(`[FALLBACK-INTERVAL] idx=${activeIdx} coords=`, boxToDraw);
                     lastLoggedInterval = activeIdx;
+                }
+            } else if (srtBox) {
+                boxToDraw = srtBox;
+                if (DEBUG_BOXES && srtActiveIndex !== lastLoggedSrtIndex) {
+                    console.log(`[SRT-BOX] idx=${srtActiveIndex} coords=`, srtBox);
+                    lastLoggedSrtIndex = srtActiveIndex;
                 }
             }
 
@@ -679,9 +679,18 @@
             // Scale box coordinates from original video dimensions to displayed video dimensions
             const scaleX = canvas.width / taskInfo.video_width;
             const scaleY = canvas.height / taskInfo.video_height;
+            ctx.save();
             ctx.strokeStyle = color;
             ctx.lineWidth = 2;
-            ctx.strokeRect(box.x * scaleX, box.y * scaleY, box.width * scaleX, box.height * scaleY);
+            // Semi-transparent fill to make changes visually obvious while dragging
+            ctx.fillStyle = 'rgba(0, 255, 0, 0.15)';
+            const x = Math.round(box.x * scaleX);
+            const y = Math.round(box.y * scaleY);
+            const w = Math.round(box.width * scaleX);
+            const h = Math.round(box.height * scaleY);
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+            ctx.restore();
         }
 
         // --- NEW ---
@@ -713,6 +722,15 @@
         function getCurrentBox() {
             if (isUniversalBoxMode) {
                 return universalBox;
+            }
+            // Prefer the actively visible interval if the video is playing
+            if (!video.paused) {
+                const frame = getCurrentFrame();
+                const idx = findActiveInterval(frame);
+                if (idx !== -1 && intervals[idx]) {
+                    const [xmin, xmax, ymin, ymax] = intervals[idx].coords;
+                    return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
+                }
             }
             if (!intervals[currentIntervalIdx]) return null;
             const [xmin, xmax, ymin, ymax] = intervals[currentIntervalIdx].coords;
@@ -830,6 +848,7 @@
                 intervals[currentIntervalIdx].coords = [newBox.x, newBox.x + newBox.width, newBox.y, newBox.y + newBox.height];
                 updateSliderValues(newBox);
             }
+            // Immediate visual feedback during dragging
             redrawCanvas(newBox);
         });
 
