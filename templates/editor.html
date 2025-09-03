@@ -1291,8 +1291,8 @@
                     const mergedInterval = intervals[newIntervalIdx];
                     
                     // Show detailed success message
-                    alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
-                    console.log(`[Merge]`, `Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0]} to frame ${mergedInterval.frame_range[1]}.`);
+                    alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0] + 1} to frame ${mergedInterval.frame_range[1] + 1}.`);
+                    console.log(`[Merge]`, `Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0] + 1} to frame ${mergedInterval.frame_range[1] + 1}.`);
                     // Load the merged interval and position timeline at the end
                     await loadInterval(newIntervalIdx, false, true);
                 } else {
@@ -1308,18 +1308,18 @@
         };
 
         splitIntervalBtn.onclick = async () => {
-            const currentFrame0 = getCurrentFrame();
+            // Use precise rounding to match UI display and avoid fractional off-by-one
+            const preciseFrame0 = Math.round(video.currentTime * taskInfo.fps);
             
-            // The backend's `split_frame` parameter defines the start of the second new interval.
-            // By sending the current frame, we split the interval *at* the current frame.
-            const splitFrame = currentFrame0;
+            // Backend expects 1-based split frame (start of the second interval)
+            const splitFrame1Based = preciseFrame0 + 1;
 
             const interval = intervals[currentIntervalIdx];
             const startFrame = interval.frame_range[0];
             const endFrame = interval.frame_range[1];
             
             // Ensure the split point is valid (not on the first or last frame of the interval)
-            if (splitFrame <= startFrame || splitFrame >= endFrame) {
+            if (preciseFrame0 <= startFrame || preciseFrame0 >= endFrame) {
                 alert(`Please position the timeline within the current interval (frames ${startFrame}-${endFrame}), but not on the very first or last frame.`);
                 return;
             }
@@ -1332,7 +1332,7 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         interval_idx: currentIntervalIdx,
-                        split_frame: splitFrame 
+                        split_frame: splitFrame1Based 
                     })
                 });
                 if (response.ok) {
@@ -1348,8 +1348,13 @@
                     // Show detailed success message and move to the second part for review
                     const firstPart = intervals[currentIntervalIdx];
                     const secondPart = intervals[newSecondIdx];
-                    alert(`Successfully split the interval. The new intervals are: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
-                    console.log(`[Split]`, `Successfully split interval. New intervals: frames ${firstPart.frame_range[0]}-${firstPart.frame_range[1]} and frames ${secondPart.frame_range[0]}-${secondPart.frame_range[1]}.`);
+                    // Convert 0-based to 1-based for display
+                    const fStart = firstPart.frame_range[0] + 1;
+                    const fEnd = firstPart.frame_range[1] + 1;
+                    const sStart = secondPart.frame_range[0] + 1;
+                    const sEnd = secondPart.frame_range[1] + 1;
+                    alert(`Successfully split the interval. The new intervals are: frames ${fStart}-${fEnd} and frames ${sStart}-${sEnd}.`);
+                    console.log(`[Split]`, `Successfully split interval. New intervals: frames ${firstPart.frame_range[0] + 1}-${firstPart.frame_range[1] + 1} and frames ${secondPart.frame_range[0] + 1}-${secondPart.frame_range[1] + 1}.`);
 
                     // Jump to the first frame of the second interval
                     await loadInterval(newSecondIdx, false, false);

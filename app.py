@@ -955,12 +955,16 @@ async def split_interval(task_id: str, req: SplitIntervalRequest):
 
     start_frame, end_frame = frame_intervals[req.interval_idx]
     
-    if not (start_frame < req.split_frame < end_frame):
+    # Frontend sends 1-based frame index for the split (start of second interval)
+    split_frame_1_based = req.split_frame
+    
+    if not (start_frame < split_frame_1_based < end_frame):
         raise HTTPException(status_code=400, detail="Split frame must be within the interval")
 
-    # Create two new intervals: put the split frame into the second part
-    first_interval = (start_frame, req.split_frame - 1)
-    second_interval = (req.split_frame, end_frame)
+    # Create two new intervals in 1-based coordinates
+    # Put the split frame into the second part
+    first_interval = (start_frame, split_frame_1_based - 1)
+    second_interval = (split_frame_1_based, end_frame)
     
     # Use the same coordinates for both parts (user can adjust later)
     coords = distinct_coords[req.interval_idx]
