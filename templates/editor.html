@@ -206,6 +206,12 @@
                 <h3>Generated Subtitles</h3>
                 <div id="subtitle-player"></div>
             </div>
+            <!--
+                Video Preview + Overlay Canvas
+                - #video-player shows the video stream served by the backend
+                - #preview-canvas renders interactive boxes aligned to the current frame
+                  (we scale box coordinates from video-space to CSS pixels)
+            -->
             <div class="preview-container">
                 <video id="video-player" controls></video>
                 <canvas id="preview-canvas"></canvas>
@@ -220,6 +226,15 @@
                     <div id="processing-percent" style="font-size:14px;">0%</div>
                 </div>
             </div>
+            <!--
+                Control Panel
+                - Generate Subtitles: runs OCR pipeline; after done, intervals are populated
+                - Timeline: navigate frames (0-based) with step control, keyboard, or scrubbing
+                - Interval controls: edit current interval frame range (displayed 1-based)
+                - Sliders/numbers: edit current box (x, y, width, height)
+                - Actions: use previous box, mark "Not a Subtitle", split/merge intervals, reset
+                - Finish and Process: starts inpainting pipeline on the backend
+            -->
             <div class="controls">
                 <div class="extra-controls">
                     <button id="generate-subtitles-btn">Generate Subtitles</button>
@@ -295,6 +310,25 @@
     </div>
 
     <script>
+        /*
+         * Editor Script Overview
+         *
+         * Data flow
+         * - Fetch intervals and video info from the backend on init.
+         * - Intervals from server are 0-based for frame ranges; UI displays 1-based to users.
+         * - Video current frame is computed as floor(currentTime * fps) (0-based).
+         * - Boxes are drawn on a transparent canvas atop the <video> and scaled to CSS pixels.
+         *
+         * Editing
+         * - Interval edits call /adjust_interval; box edits call /adjust_box.
+         * - Split/merge use dedicated endpoints.
+         * - The canvas allows pointer interaction (drag/resize) for the active box.
+         *
+         * Processing
+         * - "Generate Subtitles" runs OCR and populates intervals/boxes.
+         * - "Finish and Process" triggers inpainting (progress is shown in an overlay).
+         */
+
         // --- 1. INITIALIZATION ---
         // Get the unique task ID from the URL (e.g., /editor/some-uuid-goes-here)
         const taskId = window.location.pathname.split('/').pop();
@@ -313,7 +347,7 @@
         let universalBox = null; // Holds the state of the user-defined universal bounding box
         let isUniversalBoxMode = false; // Flag to enable universal box interaction
 
-        // Debug controls for box drawing
+        // Debug controls for box drawing (set DEBUG_BOXES=false to silence logs)
         const DEBUG_BOXES = true;
         let lastLoggedSrtIndex = -1;
         let lastLoggedInterval = -1;
@@ -397,6 +431,7 @@
         const universalBoxCoordsEl = document.getElementById('universal-box-coords');
 
         // This is the main function that runs when the page first loads.
+        // Entry point: loads intervals and metadata, configures UI, and starts the draw loop
         async function initializeEditor() {
             try {
                 const [intervalsResponse, infoResponse] = await Promise.all([
@@ -443,6 +478,7 @@
                 // Setup video player
                 video.src = `/stream_video/${taskId}`;
                 video.onloadedmetadata = () => {
+                    // Layout adapts to orientation while keeping three-panel structure
                     // Determine orientation and adjust layout classes
                     const editorMainEl = document.querySelector('.editor-main');
                     const isLandscape = video.videoWidth >= video.videoHeight;
@@ -476,6 +512,7 @@
             }
         }
 
+        // Convert current video time to 0-based frame index using authoritative fps from backend
         function getCurrentFrame() {
             return Math.floor(video.currentTime * taskInfo.fps);
         }
@@ -485,6 +522,8 @@
             return intervals.findIndex(i => frame >= i.frame_range[0] && frame <= i.frame_range[1]);
         }
 
+        // Seek to a 0-based frame, synchronizing the timeline and video currentTime.
+        // Uses a short timeout to avoid fighting with user scrubbing.
         function setTimelinePosition(frame) {
             // Helper function to set timeline position (expects 0-based frame)
             isUserScrubbing = true;
@@ -585,6 +624,10 @@
             }
         }
         
+        // Main render/update loop
+        // - Keeps timeline/frame label in sync during playback
+        // - Chooses which box to draw: active interval box preferred, else SRT fallback
+        // - Highlights the active subtitle line (if present)
         function drawLoop() {
             // Match canvas size to video element size for correct scaling
             canvas.width = video.clientWidth;
@@ -675,6 +718,8 @@
             requestAnimationFrame(drawLoop);
         }
 
+        // Draw a rectangle in video coordinates scaled to the canvas size.
+        // Semi-transparent fill helps users see changes better while dragging.
         function drawBoundingBox(box, color = 'lime') {
             // Scale box coordinates from original video dimensions to displayed video dimensions
             const scaleX = canvas.width / taskInfo.video_width;
@@ -693,7 +738,7 @@
             ctx.restore();
         }
 
-        // --- NEW ---
+        // Provide a default universal box near the bottom center
         function getInitialBoundingBox() {
             const videoWidth = taskInfo.video_width;
             const videoHeight = taskInfo.video_height;
@@ -737,6 +782,7 @@
             return { x: xmin, y: ymin, width: xmax - xmin, height: ymax - ymin };
         }
 
+        // Constrain the box to remain within video dimensions
         function clampBox(box) {
             // Ensure box stays within video bounds
             box.x = Math.max(0, Math.min(box.x, taskInfo.video_width - box.width));
@@ -923,6 +969,7 @@
         }
  
         // --- HANDLING USER INPUT AND SAVING ---
+        // Sync number sliders to local state and persist after debounce
         function handleSliderInput() {
             const box = {
                 x: parseInt(sliders.x.value),
@@ -951,6 +998,7 @@
             handleSliderInput();
         }
 
+        // Persist current interval's 1-based start/end to backend; neighbors are adjusted server-side
         async function saveInterval() {
             const startFrame = parseInt(startFrameInput.value);
             const endFrame = Math.min(parseInt(endFrameInput.value), parseInt(timeline.max) + 1);
@@ -1020,6 +1068,7 @@
             isUserScrubbing = true;
         };
         
+        // During user scrubbing, drive the video by the slider (avoid fighting ontimeupdate)
         timeline.oninput = () => {
             // Ignore programmatic timeline updates; only act on real user scrubs
             if (!isUserScrubbing) {
@@ -1119,7 +1168,7 @@
             }
         };
 
-        // Update timeline when video time changes (e.g., from navigation)
+        // Keep the timeline in sync during playback, but avoid interfering while scrubbing
         video.ontimeupdate = () => {
             // Handles timeline updates during video playback.
             if (!video.paused && !isUserScrubbing) {
@@ -1683,6 +1732,8 @@
             return subs;
         }
         
+        // Populate the left-hand subtitle panel.
+        // Clicking lines seeks by time (the draw loop updates box selection).
         function populateSubtitlePlayer(subtitles) {
             subtitlePlayer.innerHTML = ''; // Clear existing
             subtitles.forEach(sub => {
@@ -1705,8 +1756,7 @@
         }
 
         function onSubtitleClick(startTime) {
-            // Add a small epsilon to avoid floating point issues where the time might be
-            // slightly less than the intended frame's start time, causing it to round down.
+            // Nudge the target time to avoid landing just below a frame boundary (rounding down)
             const epsilon = 1 / (taskInfo.fps * 2);
             video.currentTime = startTime + epsilon;
             if (video.paused) {
