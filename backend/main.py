@@ -909,9 +909,16 @@ class SubtitleRemover:
             frames_to_process = [f for _, f in frames_by_interval[i]]
             if not frames_to_process:
                 continue
-            
+
+            # Skip intervals marked as "Not a Subtitle" (zero-size boxes)
+            try:
+                xmin, xmax, ymin, ymax = coords[i]
+                if (xmax - xmin) <= 0 or (ymax - ymin) <= 0:
+                    continue
+            except Exception:
+                continue
+
             total_inpaint_frames += len(frames_to_process)
-            xmin, xmax, ymin, ymax = coords[i]
             mask = create_mask(self.mask_size, [(xmin, xmax, ymin, ymax)])
             # Add task metadata (size, etc.) for smarter scheduling
             task = {'interval_idx': i, 'frames': frames_to_process, 'mask': mask, 'frame_count': len(frames_to_process)}
@@ -1120,6 +1127,12 @@ class SubtitleRemover:
         frame_to_inpaint_map = {}
         for i in range(len(intervals)):
             start, end = intervals[i]
+            try:
+                xmin, xmax, ymin, ymax = coords[i]
+                if (xmax - xmin) <= 0 or (ymax - ymin) <= 0:
+                    continue
+            except Exception:
+                continue
             for frame_no in range(start, end + 1):
                 frame_to_inpaint_map[frame_no] = (coords[i], i)
 
@@ -1294,6 +1307,12 @@ class SubtitleRemover:
         start_end_coord_map = dict()
         for i in range(len(intervals)):
             start, end = intervals[i]
+            try:
+                xmin, xmax, ymin, ymax = coords[i]
+                if (xmax - xmin) <= 0 or (ymax - ymin) <= 0:
+                    continue
+            except Exception:
+                continue
             start_end_coord_map[start] = (end, coords[i])
 
         if self.lama_inpaint is None:
