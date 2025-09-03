@@ -78,6 +78,18 @@ class SubtitleDetect:
         return coordinate_list
 
     def find_subtitle_frame_no(self, sub_remover=None, status_file_path: str = None):
+        """
+        Scan the video and detect per-frame subtitle bounding boxes.
+
+        Behavior and conventions:
+        - Frame numbering is 1-based externally. Internally OpenCV seeks 0-based; we always
+          convert at the boundary when seeking, but keys in the returned dict remain 1-based.
+        - Batch processing is used for GPU efficiency. Each batch is detected sequentially here
+          to minimize memory spikes while still benefiting from model warm-up.
+        - When `sub_area` is provided, detections are filtered to that region.
+        - Progress is reported both to tqdm (CLI) and to an optional JSON status file for the UI.
+        - Output: dict[frame_no_1_based] -> List[(xmin, xmax, ymin, ymax)] for that frame.
+        """
         video_cap = cv2.VideoCapture(self.video_path)
         frame_count = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
         tbar = tqdm(total=frame_count, unit='frame', position=0, file=sys.__stdout__, desc='Subtitle Finding')
@@ -243,6 +255,10 @@ class SubtitleDetect:
     def get_scene_div_frame_no(v_path):
         """
         获取发生场景切换的帧号
+
+        Returns:
+        - List of frame indices in 1-based numbering, where each index is the first frame
+          AFTER a scene cut. This aligns with our external 1-based interval convention.
         """
         scene_div_frame_no_list = []
         scene_list = scene_detect(v_path, ContentDetector())
@@ -280,6 +296,8 @@ class SubtitleDetect:
             return False
 
         # Original corner proximity check
+        # Use tolerances from config (PIXEL_TOLERANCE_X/Y) so that small OCR jitter does not
+        # split regions that visually refer to the same subtitle line.
         corners_are_close = (
             abs(xmin1 - xmin2) <= config.PIXEL_TOLERANCE_X and
             abs(xmax1 - xmax2) <= config.PIXEL_TOLERANCE_X and
@@ -307,6 +325,8 @@ class SubtitleDetect:
 
             # 初始化
             last_key = keys[0]
+            # `unify_value_map` carries forward a stable per-slot box across frames so that
+            # slight coordinate jitter does not cause flickering region identities.
             unify_value_map = {last_key: raw_regions[last_key]}
 
             for key in keys[1:]:
@@ -1564,6 +1584,8 @@ class SubtitleExtractor:
         video_cap = cv2.VideoCapture(self.video_path)
 
         xmin, xmax, ymin, ymax = universal_box
+        # Apply a small safety padding around the universal box to capture edge glyphs
+        # and antialiased halos that often appear around subtitles.
         padding = 10
         crop_xmin = max(0, xmin - padding)
         crop_ymin = max(0, ymin - padding)
@@ -1574,7 +1596,7 @@ class SubtitleExtractor:
         processed_frames = 0
 
         for frame_no in tqdm(frames_to_scan, desc="OCR on Universal Region"):
-            # Frame numbers from detection are 1-based, need to seek to 0-based index
+            # Frame numbers from detection are 1-based, OpenCV seeks 0-based.
             video_cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no - 1)
             ret, frame = video_cap.read()
             if not ret:
@@ -1624,12 +1646,15 @@ class SubtitleExtractor:
                 pass  # create empty file
             return srt_filename, []
 
+        # Build consolidated (start_frame_1b, end_frame_1b, coord_str, text) tuples from raw OCR
+        # by collapsing duplicates and merging per-frame multi-line results.
         subtitle_content = self._remove_duplicate_subtitle()
         srt_filename = os.path.join(os.path.splitext(self.video_path)[0] + '.srt')
         
         with open(srt_filename, mode='w', encoding='utf-8') as f:
             for index, content in enumerate(subtitle_content):
                 line_code = index + 1
+                # Convert 1-based frame indices to SRT wall-clock timestamps.
                 frame_start = self._frame_to_timecode(int(content[0]))
                 frame_end = self._frame_to_timecode(int(content[1]))
                 
@@ -1654,7 +1679,7 @@ class SubtitleExtractor:
         """
         Converts a 1-based frame number to an SRT timecode.
         """
-        # Frame numbers are 1-based, video frames are 0-based.
+        # Frame numbers are 1-based externally; OpenCV frames are 0-based. Shift by one.
         frame_idx_0_based = max(0, frame_no - 1)
 
         # Calculate time in seconds directly from frame number and FPS for precision.
@@ -1676,6 +1701,15 @@ class SubtitleExtractor:
         """
         Reads the raw subtitle file, removes duplicate lines, and returns a clean list.
         """
+        # Algorithm overview
+        # 1) Coalesce multiple OCR lines that share the same frame number into one record by
+        #    unioning their boxes and concatenating text (handled in _concat_content_with_same_frameno).
+        # 2) Iterate chronologically and group consecutive frames whose texts are similar
+        #    (Levenshtein ratio threshold). For each group:
+        #       - Set interval start/end using the first/last frame in the group.
+        #       - Select the longest text among the group as the canonical subtitle.
+        #       - Union all coordinates across the group to ensure the inpaint mask covers the full line.
+        # 3) Return a list of tuples: (start_frame_1b, end_frame_1b, coord_str, text).
         self._concat_content_with_same_frameno()
         with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as r:
             lines = r.readlines()
@@ -1769,7 +1803,9 @@ class SubtitleExtractor:
         with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
             for frame_no, items in content_map.items():
                 if len(items) > 1:
-                    # Compute union of all coordinates in this frame and concatenate text
+                    # For frames with multiple detections:
+                    # - Union all coords to cover the entire subtitle row for inpainting
+                    # - Concatenate texts in reading order (best-effort without layout)
                     xmin_u, ymin_u = float('inf'), float('inf')
                     xmax_u, ymax_u = float('-inf'), float('-inf')
                     any_valid = False

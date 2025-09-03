@@ -655,27 +655,21 @@
             }
 
             // Sync subtitle player with video
-            // Prefer frame-based highlighting aligned with detected intervals to avoid time rounding issues
-            let highlightIndex = -1;
-            const activeIdxFrame = findActiveInterval(currentFrame);
-            if (activeIdxFrame !== -1 && subtitlePlayer && subtitlePlayer.children && subtitlePlayer.children.length === intervals.length) {
-                highlightIndex = activeIdxFrame;
-            } else if (parsedSubtitles && parsedSubtitles.length > 0) {
-                // Fallback: use time-based highlight if counts don't align
-                highlightIndex = parsedSubtitles.findIndex(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
-            }
-            if (highlightIndex !== currentSubtitleIndex) {
-                if (currentSubtitleIndex !== -1) {
-                    subtitlePlayer.children[currentSubtitleIndex]?.classList.remove('active');
-                }
-                if (highlightIndex !== -1) {
-                    const activeLine = subtitlePlayer.children[highlightIndex];
-                    if (activeLine) {
-                        activeLine.classList.add('active');
-                        activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            if (parsedSubtitles && parsedSubtitles.length > 0) {
+                const activeSubIndex = parsedSubtitles.findIndex(sub => currentTime >= sub.startTime && currentTime <= sub.endTime);
+                if (activeSubIndex !== currentSubtitleIndex) {
+                    if (currentSubtitleIndex !== -1) {
+                        subtitlePlayer.children[currentSubtitleIndex]?.classList.remove('active');
                     }
+                    if (activeSubIndex !== -1) {
+                        const activeLine = subtitlePlayer.children[activeSubIndex];
+                        if (activeLine) {
+                            activeLine.classList.add('active');
+                            activeLine.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    }
+                    currentSubtitleIndex = activeSubIndex;
                 }
-                currentSubtitleIndex = highlightIndex;
             }
 
             requestAnimationFrame(drawLoop);
@@ -1691,7 +1685,7 @@
         
         function populateSubtitlePlayer(subtitles) {
             subtitlePlayer.innerHTML = ''; // Clear existing
-            subtitles.forEach((sub, idx) => {
+            subtitles.forEach(sub => {
                 const lineDiv = document.createElement('div');
                 lineDiv.className = 'subtitle-line';
                 
@@ -1705,23 +1699,18 @@
                 lineDiv.appendChild(timeSpan);
                 lineDiv.appendChild(textSpan);
 
-                // Use frame-based navigation mapped by index to avoid time rounding
-                lineDiv.onclick = () => onSubtitleClick(idx);
+                lineDiv.onclick = () => onSubtitleClick(sub.startTime);
                 subtitlePlayer.appendChild(lineDiv);
             });
         }
 
-        function onSubtitleClick(lineIndex) {
-            if (!parsedSubtitles || !parsedSubtitles[lineIndex]) return;
-            const startTime = parsedSubtitles[lineIndex].startTime;
-            const frame0 = Math.max(0, Math.round(startTime * (taskInfo.fps || 30)));
-            // If we have detected intervals, snap to the interval containing this frame
-            const idx = findActiveInterval(frame0);
-            if (idx !== -1 && intervals[idx]) {
-                const start0 = Math.max(0, intervals[idx].frame_range[0]);
-                setTimelinePosition(start0);
-            } else {
-                setTimelinePosition(frame0);
+        function onSubtitleClick(startTime) {
+            // Add a small epsilon to avoid floating point issues where the time might be
+            // slightly less than the intended frame's start time, causing it to round down.
+            const epsilon = 1 / (taskInfo.fps * 2);
+            video.currentTime = startTime + epsilon;
+            if (video.paused) {
+                 // The drawLoop will handle drawing the box
             }
         }
 
