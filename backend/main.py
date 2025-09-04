@@ -887,6 +887,7 @@ class SubtitleRemover:
 
     def propainter_mode_multi_gpu(self, tbar):
         print(f"Using {len(config.DEVICES)} GPUs for parallel processing.")
+        print(f"[ProPainter] Video resolution: {self.frame_width}x{self.frame_height}; computed batch size: {self.propainter_max_load_num}")
         
         # Set start method to 'spawn' for CUDA safety in multiprocessing
         try:
@@ -1207,6 +1208,7 @@ class SubtitleRemover:
     def propainter_mode_single_gpu(self, tbar):
         intervals = self.frame_intervals
         coords = self.distinct_coords
+        print(f"[ProPainter] Video resolution: {self.frame_width}x{self.frame_height}; computed batch size: {self.propainter_max_load_num}")
 
         # Create a lookup map for which frames to inpaint
         frame_to_inpaint_map = {}
