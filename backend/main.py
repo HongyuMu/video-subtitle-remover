@@ -660,7 +660,7 @@ class SubtitleDetect:
 
 
 class SubtitleRemover:
-    def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False):
+    def __init__(self, vd_path, sub_area=None, distinct_coords=None, frame_intervals=None, gui_mode=False, mode=None):
         # importlib.reload(config)
         # 线程锁
         self.lock = threading.RLock()
@@ -734,6 +734,8 @@ class SubtitleRemover:
         self.processed_inpaint_frames = 0
         self.total_write_frames = None
         self.processed_write_frames = 0
+        # Optional override for inpaint mode per run (string or InpaintMode)
+        self.mode = mode
 
     @staticmethod
     def get_coordinates(dt_box):
@@ -1408,10 +1410,28 @@ class SubtitleRemover:
             tbar.update(1)
             self.progress_total = 100
         else:
+            # 选择处理模式（优先使用实例覆盖，其次全局配置）
+            chosen_mode = None
+            try:
+                if isinstance(self.mode, config.InpaintMode):
+                    chosen_mode = self.mode
+                elif isinstance(self.mode, str):
+                    mode_lc = self.mode.strip().lower()
+                    if mode_lc == 'sttn':
+                        chosen_mode = config.InpaintMode.STTN
+                    elif mode_lc == 'lama':
+                        chosen_mode = config.InpaintMode.LAMA
+                    elif mode_lc == 'propainter':
+                        chosen_mode = config.InpaintMode.PROPAINTER
+                if chosen_mode is None:
+                    chosen_mode = config.MODE
+            except Exception:
+                chosen_mode = config.MODE
+
             # 精准模式下，获取场景分割的帧号，进一步切割
-            if config.MODE == config.InpaintMode.PROPAINTER:
+            if chosen_mode == config.InpaintMode.PROPAINTER:
                 self.propainter_mode(tbar)
-            elif config.MODE == config.InpaintMode.STTN:
+            elif chosen_mode == config.InpaintMode.STTN:
                 self.sttn_mode(tbar)
             else:
                 self.lama_mode(tbar)

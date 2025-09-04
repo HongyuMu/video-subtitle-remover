@@ -680,8 +680,11 @@ async def get_task_info(task_id: str, request: Request):
 
 
 # 
+class ProcessTaskRequest(BaseModel):
+    mode: str | None = None  # 'sttn' | 'lama' | 'propainter'
+
 @app.post("/process_task/{task_id}", include_in_schema=False)
-async def process_task(task_id: str, background_tasks: BackgroundTasks):
+async def process_task(task_id: str, background_tasks: BackgroundTasks, req: ProcessTaskRequest | None = None):
     """
     Starts the subtitle removal process for a task that has been edited.
     """
@@ -703,12 +706,19 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
     processed_video_path = PROCESSED_DIR / f"processed_{original_stem}.mp4"
     status_file = PROCESSED_DIR / f"{original_stem}.status"
 
+    mode = None
+    try:
+        mode = (req.mode if req else None)
+    except Exception:
+        mode = None
+
     background_tasks.add_task(
         process_video,
         video_path,
         temp_json_path,
         processed_video_path,
-        status_file
+        status_file,
+        mode
     )
     print(f"[PROCESS] Started background task for {original_stem}. status_file={status_file}, output={processed_video_path}")
     
@@ -720,7 +730,7 @@ async def process_task(task_id: str, background_tasks: BackgroundTasks):
 
 
 # Call the SubtitleRemover class to remove subtitles
-def process_video(video_path, json_path, output_path, status_file):
+def process_video(video_path, json_path, output_path, status_file, mode=None):
     try:
         # Immediately write a "Processing" status to the file so the frontend knows work has started.
         with open(status_file, 'w') as f:
@@ -730,7 +740,7 @@ def process_video(video_path, json_path, output_path, status_file):
             json_data = json.load(f)
         coords = json_data.get("distinct_coordinates")
         intervals = json_data.get("frame_intervals")
-        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals)
+        sd = SubtitleRemover(video_path, distinct_coords=coords, frame_intervals=intervals, mode=mode)
         # Let the remover write incremental progress into the same status file
         try:
             sd.status_file_path = str(status_file)
