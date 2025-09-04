@@ -53,6 +53,9 @@ PROCESSED_FILES_DIR.mkdir(exist_ok=True)
 
 TASK_RESULTS = {}
 
+# Maximum upload size in MB
+MAX_UPLOAD_MB = 80
+
 def check_memory_usage():
     """Check current system memory usage and warn if it's high."""
     try:
@@ -136,12 +139,33 @@ async def manual_cleanup(user_id: str):
         return {"message": response_message}
 
 
-def save_temp_file(upload_file: UploadFile, suffix=".mp4"):
+def save_temp_file(upload_file: UploadFile, suffix=".mp4", max_size_mb: int = MAX_UPLOAD_MB):
+    """Save an uploaded file to a temporary path with a size limit.
+    Raises HTTPException 413 if the file exceeds max_size_mb.
+    """
+    max_bytes = max_size_mb * 1024 * 1024
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-        temp_file.write(upload_file.file.read())
+        written = 0
+        while True:
+            chunk = upload_file.file.read(1024 * 1024)  # 1MB
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > max_bytes:
+                try:
+                    temp_file.close()
+                finally:
+                    try:
+                        if os.path.exists(temp_file.name):
+                            os.remove(temp_file.name)
+                    except Exception:
+                        pass
+                # Do not abort the request here; return None to let caller handle UX
+                return None
+            temp_file.write(chunk)
         return temp_file.name
 
-async def download_file(url: str, dest_path: str, max_size_mb: int = 50):
+async def download_file(url: str, dest_path: str, max_size_mb: int = MAX_UPLOAD_MB):
     """Download file with size limit for Coze compatibility"""
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -185,15 +209,20 @@ async def upload_and_edit(
     try:
         if file and file.filename:
             original_name = Path(file.filename).stem
-            temp_video_path = save_temp_file(file)
+            temp_video_path = save_temp_file(file, max_size_mb=MAX_UPLOAD_MB)
+            if temp_video_path is None:
+                return JSONResponse(status_code=413, content={
+                    "status": "Error",
+                    "message": f"File too large: exceeds {MAX_UPLOAD_MB}MB limit. Please upload a smaller file."
+                })
         elif url:
             original_name = Path(url).stem
             temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-            await download_file(url, temp_video_path)
+            await download_file(url, temp_video_path, max_size_mb=MAX_UPLOAD_MB)
         elif cloud_ref:
             original_name = Path(cloud_ref).stem
             temp_video_path = f"/tmp/{uuid.uuid4()}.mp4"
-            await download_file(cloud_ref, temp_video_path)
+            await download_file(cloud_ref, temp_video_path, max_size_mb=MAX_UPLOAD_MB)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process input video: {e}")
 
