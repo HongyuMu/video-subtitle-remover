@@ -225,6 +225,36 @@
                     </div>
                     <div id="processing-percent" style="font-size:14px;">0%</div>
                 </div>
+                <!-- Mode selection dialog (hidden until Finish and Process) -->
+                <div id="mode-dialog" style="display:none; position:absolute; inset:0; background:rgba(0,0,0,0.6); color:#fff;">
+                    <div style="position:absolute; top:50%; left:50%; transform:translate(-50%, -50%); background:#1f1f1f; color:#fff; padding:20px; border-radius:8px; width:90%; max-width:640px; box-shadow:0 4px 12px rgba(0,0,0,0.35);">
+                        <h3 style="margin-top:0;">Choose Inpainting Mode</h3>
+                        <div style="display:flex; flex-direction:column; gap:10px;">
+                            <label style="display:flex; gap:10px; align-items:flex-start;">
+                                <input type="radio" name="mode" value="sttn" checked>
+                                <div>
+                                    <strong>STTN</strong> — Best for long, stable videos. Fast and memory efficient. Not recommended for fast-paced videos.
+                                </div>
+                            </label>
+                            <label style="display:flex; gap:10px; align-items:flex-start;">
+                                <input type="radio" name="mode" value="lama">
+                                <div>
+                                    <strong>Lama</strong> — Often better for anime content.
+                                </div>
+                            </label>
+                            <label style="display:flex; gap:10px; align-items:flex-start;">
+                                <input type="radio" name="mode" value="propainter">
+                                <div>
+                                    <strong>ProPainter</strong> — Highest quality if you have enough memory and time. Learns motion across frames.
+                                </div>
+                            </label>
+                        </div>
+                        <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:16px;">
+                            <button id="mode-cancel" style="background:#6c757d;">Cancel</button>
+                            <button id="mode-continue" style="background:#28a745;">Continue</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <!--
                 Control Panel
@@ -1475,11 +1505,34 @@
                     finishBtn.textContent = "Finish and Process";
                 }
             }, 3000); // Poll every 3 seconds
-        }
+        }        
 
         // This function is called when the user clicks the "Finish and Process" button.
+        // It opens a mode-selection dialog, then asks for final confirmation.
         finishBtn.onclick = async () => {
-            if (confirm("Once you confirm, you cannot make any changes to the video. Are you sure you want to proceed?")) {
+            const modeDialog = document.getElementById('mode-dialog');
+            if (!modeDialog) return;
+            modeDialog.style.display = 'block';
+
+            const cancelBtn = document.getElementById('mode-cancel');
+            const contBtn = document.getElementById('mode-continue');
+
+            const cleanup = () => {
+                modeDialog.style.display = 'none';
+                if (cancelBtn) cancelBtn.onclick = null;
+                if (contBtn) contBtn.onclick = null;
+            };
+
+            if (cancelBtn) cancelBtn.onclick = () => cleanup();
+            if (contBtn) contBtn.onclick = async () => {
+                const selected = document.querySelector('input[name="mode"]:checked');
+                const chosenMode = selected ? selected.value : 'sttn';
+                cleanup();
+
+                if (!confirm("Once you confirm, you cannot make any changes to the video. Proceed with selected mode?")) {
+                    return;
+                }
+
                 finishBtn.disabled = true;
                 finishBtn.textContent = "Processing...";
                 // Show overlay immediately after user confirmation
@@ -1494,8 +1547,12 @@
                     stageEl.textContent = 'Stage: Preparing';
                 }
                 try {
-                    // Tell the server to start the final video processing job
-                    const response = await fetch(`/process_task/${taskId}`, { method: 'POST' });
+                    // Tell the server to start the final video processing job with the chosen mode
+                    const response = await fetch(`/process_task/${taskId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ mode: chosenMode })
+                    });
                     if (response.ok) {
                         const data = await response.json();
                         alert("Processing started! This may take a few minutes. Your download will begin automatically when it's ready.");
@@ -1510,7 +1567,7 @@
                     finishBtn.disabled = false;
                     finishBtn.textContent = "Finish and Process";
                 }
-            }
+            };
         };
 
         generateSubtitlesBtn.onclick = async () => {
