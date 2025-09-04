@@ -736,6 +736,8 @@ class SubtitleRemover:
         self.processed_write_frames = 0
         # Optional override for inpaint mode per run (string or InpaintMode)
         self.mode = mode
+        # Dynamically compute ProPainter batch size based on resolution for better VRAM usage
+        self.propainter_max_load_num = self._compute_propainter_load_num()
 
     @staticmethod
     def get_coordinates(dt_box):
@@ -958,7 +960,7 @@ class SubtitleRemover:
             gpu_id = config.DEVICES[i].index
             worker_process = multiprocessing.Process(
                 target=inpaint_worker,
-                args=(task_queues[i], result_queue, heartbeat_queue, gpu_id, config.PROPAINTER_MAX_LOAD_NUM, False)  # Disable fp16 for stability
+                args=(task_queues[i], result_queue, heartbeat_queue, gpu_id, self.propainter_max_load_num, False)  # Disable fp16 for stability
             )
             worker_process.daemon = True
             workers.append(worker_process)
@@ -1158,7 +1160,7 @@ class SubtitleRemover:
             for frame_no in range(start, end + 1):
                 frame_to_inpaint_map[frame_no] = (coords[i], i)
 
-        self.video_inpaint = VideoInpaint(config.PROPAINTER_MAX_LOAD_NUM)
+        self.video_inpaint = VideoInpaint(self.propainter_max_load_num)
         print('[Processing] start removing subtitles...')
 
         # Start reader and writer threads
@@ -1219,7 +1221,7 @@ class SubtitleRemover:
         mask_area_coordinates = [(xmin, xmax, ymin, ymax)]
         mask = create_mask(self.mask_size, mask_area_coordinates)
 
-        for batch in batch_generator(frames, config.PROPAINTER_MAX_LOAD_NUM):
+        for batch in batch_generator(frames, self.propainter_max_load_num):
             if len(batch) == 1:
                 if self.lama_inpaint is None:
                     self.lama_inpaint = LamaInpaint()
@@ -1531,6 +1533,34 @@ class SubtitleRemover:
                 except IOError as e:
                     print("Unable to copy file. %s" % e)
             self.video_temp_file.close()
+
+    def _compute_propainter_load_num(self) -> int:
+        """
+        Compute a per-run ProPainter batch size based on video resolution.
+        Heuristic:
+        - ~720p (e.g., 1280x720): around 40 frames
+        - ~1080p (e.g., 1920x1080): around 18 frames
+        - Higher resolutions scale down further with sqrt(area ratio)
+        Bounded to [8, max(config.PROPAINTER_MAX_LOAD_NUM, 10)].
+        """
+        try:
+            width = max(1, int(self.frame_width))
+            height = max(1, int(self.frame_height))
+            pixels = width * height
+            ref_720p = 1280 * 720
+            ref_1080p = 1920 * 1080
+            if pixels <= int(ref_720p * 1.1):
+                target = 40
+            elif pixels <= int(ref_1080p * 1.1):
+                target = 18
+            else:
+                scale = (pixels / ref_1080p) ** 0.5
+                target = int(18 / max(1.0, scale))
+            upper = max(10, int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', 40)))
+            target = max(8, min(target, upper))
+            return target
+        except Exception:
+            return int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', 40))
     
 def find_smallest_bounding_box(coordinates):
     # Initialize min and max values based on the first box

@@ -679,7 +679,6 @@ async def get_task_info(task_id: str, request: Request):
     return {"status": "Unknown"}
 
 
-# 
 class ProcessTaskRequest(BaseModel):
     mode: str | None = None  # 'sttn' | 'lama' | 'propainter'
 
