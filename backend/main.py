@@ -995,6 +995,7 @@ class SubtitleRemover:
         inpainted_results = {}
         
         idle_poll_cycles = 0
+        all_dead_cycles = 0
         # Heartbeat tracking
         last_heartbeat = {config.DEVICES[i].index: time.time() for i in range(num_workers)}
         
@@ -1183,6 +1184,27 @@ class SubtitleRemover:
                                 idle_poll_cycles = 0
                         except Exception as e:
                             print(f"[Dispatcher] Parallel reassignment failed: {e}")
+                # Global failsafe: if no workers are alive for 2 consecutive idle cycles and work remains, abort
+                try:
+                    alive_count = sum(1 for w in workers if w.is_alive())
+                except Exception:
+                    alive_count = 0
+                if outstanding != 0 and alive_count == 0:
+                    all_dead_cycles += 1
+                    print(f"[Dispatcher] All workers dead (cycle {all_dead_cycles}). Outstanding intervals: {outstanding}.")
+                    if all_dead_cycles >= 2:
+                        msg = "All GPU workers exited. Reduce resolution or batch size and retry."
+                        print(f"[Dispatcher] {msg}")
+                        if self.status_file_path:
+                            try:
+                                with open(self.status_file_path, 'w') as f:
+                                    json.dump({"status": f"Error: {msg}"}, f)
+                            except Exception:
+                                pass
+                        # Raise to be caught by higher-level handler
+                        raise RuntimeError(msg)
+                else:
+                    all_dead_cycles = 0
                 # Remove risky fallback that could duplicate assignments while workers are alive
                 continue
 

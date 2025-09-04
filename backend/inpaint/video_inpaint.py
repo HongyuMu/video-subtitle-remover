@@ -68,16 +68,16 @@ def inpaint_worker(task_queue, result_queue, heartbeat_queue, gpu_id, sub_video_
                 
             interval_idx, frames_np, mask_np = task
             print(f"[Worker-{gpu_id}] Received task: interval {interval_idx} with {len(frames_np)} frames.")
-            try:
-                h, w = frames_np[0].shape[:2]
-                print(f"[Worker-{gpu_id}] First frame resolution: {w}x{h}; processing batch size = {int(sub_video_length)}")
-            except Exception:
-                pass
-            try:
-                free_now, total_now = torch.cuda.mem_get_info(gpu_id)
-                print(f"[Worker-{gpu_id}] Free mem after receiving task: {free_now / 1024**2:.2f} MB / {total_now / 1024**2:.2f} MB")
-            except Exception:
-                pass
+            # try:
+            #     h, w = frames_np[0].shape[:2]
+            #     print(f"[Worker-{gpu_id}] First frame resolution: {w}x{h}; processing batch size = {int(sub_video_length)}")
+            # except Exception:
+            #     pass
+            # try:
+            #     free_now, total_now = torch.cuda.mem_get_info(gpu_id)
+            #     print(f"[Worker-{gpu_id}] Free mem after receiving task: {free_now / 1024**2:.2f} MB / {total_now / 1024**2:.2f} MB")
+            # except Exception:
+            #     pass
             
             # Process in batches to avoid OOM on long intervals
             inpainted_frames_bgr_all = []
