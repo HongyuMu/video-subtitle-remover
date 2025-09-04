@@ -1537,28 +1537,22 @@ class SubtitleRemover:
     def _compute_propainter_load_num(self) -> int:
         """
         Compute a per-run ProPainter batch size based on video resolution.
-        Heuristic:
-        - ~720p (e.g., 1280x720): around 40 frames
-        - ~1080p (e.g., 1920x1080): around 18 frames
-        - Higher resolutions scale down further with sqrt(area ratio)
-        Bounded to [8, max(config.PROPAINTER_MAX_LOAD_NUM, 10)].
+        Through benchmarking, 40 is the optimal batch size for ProPainter when the video resolution is 720*1280.
+        target = floor((1280 * 720 * 40) / pixels)
+        and then clamp to [10, 60].
         """
         try:
             width = max(1, int(self.frame_width))
             height = max(1, int(self.frame_height))
             pixels = width * height
-            ref_720p = 1280 * 720
-            ref_1080p = 1920 * 1080
-            if pixels <= int(ref_720p * 1.1):
-                target = 40
-            elif pixels <= int(ref_1080p * 1.1):
-                target = 18
-            else:
-                scale = (pixels / ref_1080p) ** 0.5
-                target = int(18 / max(1.0, scale))
-            upper = max(10, int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', 40)))
-            target = max(8, min(target, upper))
-            return target
+            base_numer = 1280 * 720 * 40
+            target = base_numer // pixels if pixels > 0 else 40
+            # Clamp to [10, 60]
+            if target < 10:
+                target = 10
+            elif target > 60:
+                target = 60
+            return int(target)
         except Exception:
             return int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', 40))
     
