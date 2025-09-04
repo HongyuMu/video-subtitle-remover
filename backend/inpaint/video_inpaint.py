@@ -54,6 +54,7 @@ def inpaint_worker(task_queue, result_queue, heartbeat_queue, gpu_id, sub_video_
         print(f"[Worker-{gpu_id}] Initial GPU Memory - Free: {free_mem / 1024**2:.2f} MB / Total: {total_mem / 1024**2:.2f} MB")
         
         # Each worker needs its own model instance on its assigned GPU
+        print(f"[Worker-{gpu_id}] Using sub_video_length (batch size): {int(sub_video_length)}")
         video_inpaint = VideoInpaint(sub_video_length=sub_video_length, use_fp16=use_fp16, gpu_id=gpu_id)
         
         last_hb_ts = time.time()
@@ -68,6 +69,11 @@ def inpaint_worker(task_queue, result_queue, heartbeat_queue, gpu_id, sub_video_
             interval_idx, frames_np, mask_np = task
             print(f"[Worker-{gpu_id}] Received task: interval {interval_idx} with {len(frames_np)} frames.")
             try:
+                h, w = frames_np[0].shape[:2]
+                print(f"[Worker-{gpu_id}] First frame resolution: {w}x{h}; processing batch size = {int(sub_video_length)}")
+            except Exception:
+                pass
+            try:
                 free_now, total_now = torch.cuda.mem_get_info(gpu_id)
                 print(f"[Worker-{gpu_id}] Free mem after receiving task: {free_now / 1024**2:.2f} MB / {total_now / 1024**2:.2f} MB")
             except Exception:
@@ -75,7 +81,7 @@ def inpaint_worker(task_queue, result_queue, heartbeat_queue, gpu_id, sub_video_
             
             # Process in batches to avoid OOM on long intervals
             inpainted_frames_bgr_all = []
-            for batch_idx, batch_np in enumerate(batch_generator(frames_np, config.PROPAINTER_MAX_LOAD_NUM)):
+            for batch_idx, batch_np in enumerate(batch_generator(frames_np, int(sub_video_length))):
                 print(f"[Worker-{gpu_id}] Interval {interval_idx}: processing batch {batch_idx+1} with {len(batch_np)} frames...")
                 # Emit heartbeat at start of each batch
                 try:
