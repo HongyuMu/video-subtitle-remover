@@ -1011,6 +1011,67 @@ class SubtitleRemover:
                             last_heartbeat[hb_gpu_id] = hb_ts
                 except Exception:
                     pass
+                # After draining heartbeats, immediately detect and reassign any lost intervals
+                try:
+                    lost_intervals = []
+                    dead_gpu_ids = []
+                    now_ts = time.time()
+                    for i, worker in enumerate(workers):
+                        gpu_id = config.DEVICES[i].index
+                        owned_interval = assigned_by_gpu.get(gpu_id)
+                        if owned_interval is None:
+                            continue
+                        # If heartbeat timed out or worker not alive, reclaim its interval
+                        if (not worker.is_alive()) or (now_ts - last_heartbeat.get(gpu_id, 0) > config.HEARTBEAT_TIMEOUT):
+                            try:
+                                if worker.is_alive():
+                                    worker.terminate()
+                            except Exception:
+                                pass
+                            try:
+                                if getattr(worker, 'pid', None):
+                                    os.kill(worker.pid, signal.SIGKILL)
+                            except Exception:
+                                pass
+                            lost_intervals.append(owned_interval)
+                            dead_gpu_ids.append(gpu_id)
+
+                    if lost_intervals:
+                        # Identify alive and idle GPUs and reassign immediately to avoid idle cycles
+                        free_list = []
+                        for j, w in enumerate(workers):
+                            if w.is_alive():
+                                dev_id = config.DEVICES[j].index
+                                if assigned_by_gpu.get(dev_id) is None:
+                                    try:
+                                        free_mem, total_mem = torch.cuda.mem_get_info(dev_id)
+                                    except Exception:
+                                        free_mem = 0
+                                    free_list.append((free_mem, dev_id, j))
+                        if free_list:
+                            free_list.sort(reverse=True)
+                            num_to_assign = min(len(lost_intervals), len(free_list))
+                            for k in range(num_to_assign):
+                                interval_k = lost_intervals[k]
+                                _, best_gpu, best_idx = free_list[k]
+                                task = task_map.get(interval_k)
+                                if not task:
+                                    continue
+                                # Clear old owner
+                                for dg in dead_gpu_ids:
+                                    if assigned_by_gpu.get(dg) == interval_k:
+                                        assigned_by_gpu[dg] = None
+                                # Assign to the best idle GPU
+                                task_queues[best_idx].put((task['interval_idx'], task['frames'], task['mask']))
+                                assigned_by_gpu[best_gpu] = task['interval_idx']
+                                interval_to_gpu[task['interval_idx']] = best_gpu
+                                active_intervals.add(task['interval_idx'])
+                                last_heartbeat[best_gpu] = time.time()
+                                outstanding = len(active_intervals)
+                                print(f"[Dispatcher] Immediately reassigned interval {interval_k} to GPU {best_gpu}.")
+                except Exception as e:
+                    print(f"[Dispatcher] Immediate reassignment failed: {e}")
+
                 # Moderate timeout, so we can keep heartbeats checked
                 interval_idx, inpainted_frames, gpu_id = result_queue.get(timeout=10)
                 print(f"[Dispatcher] Got result from GPU {gpu_id} for interval {interval_idx} (frames: {len(inpainted_frames)}).")
