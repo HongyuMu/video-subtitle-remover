@@ -227,49 +227,6 @@ class SubtitleDetect:
             print(f"Error during conversion: {e}")
             return model_dir
 
-
-    @staticmethod
-    def split_range_by_scene(intervals, points):
-        # 确保离散值列表是有序的
-        points.sort()
-        # 用于存储结果区间的列表
-        result_intervals = []
-        # 遍历区间
-        for start, end in intervals:
-            # 在当前区间内的点
-            current_points = [p for p in points if start <= p <= end]
-
-            # 遍历当前区间内的离散点
-            for p in current_points:
-                # 如果当前离散点不是区间的起始点，添加从区间开始到离散点前一个数字的区间
-                if start < p:
-                    result_intervals.append((start, p - 1))
-                # 更新区间开始为当前离散点
-                start = p
-            # 添加从最后一个离散点或区间开始到区间结束的区间
-            result_intervals.append((start, end))
-        # 输出结果
-        return result_intervals
-
-    @staticmethod
-    def get_scene_div_frame_no(v_path):
-        """
-        获取发生场景切换的帧号
-
-        Returns:
-        - List of frame indices in 1-based numbering, where each index is the first frame
-          AFTER a scene cut. This aligns with our external 1-based interval convention.
-        """
-        scene_div_frame_no_list = []
-        scene_list = scene_detect(v_path, ContentDetector())
-        for scene in scene_list:
-            start, end = scene
-            if start.frame_num == 0:
-                pass
-            else:
-                scene_div_frame_no_list.append(start.frame_num + 1)
-        return scene_div_frame_no_list
-
     @staticmethod
     def are_similar(region1, region2):
         """
@@ -1954,58 +1911,6 @@ class SubtitleExtractor:
                     f.write(f'{frame_no}\t{coordinate_out}\t{unicodedata.normalize("NFKC", content_out)}\n')
                 else:
                     f.write(f'{frame_no}\t{items[0][0]}\t{unicodedata.normalize("NFKC", items[0][1])}\n')
-
-    def _detect_watermark_area(self):
-        """
-        Analyzes the raw subtitle file to find frequently occurring text boxes, which are likely watermarks.
-        """
-        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        coordinates_list = []
-        frame_no_list = []
-        content_list = []
-
-        for line in lines:
-            parts = line.strip().split('\t')
-            if len(parts) != 3:
-                continue
-            frame_no, coordinate_str, content = parts
-            text_position = coordinate_str.replace('(', '').replace(')', '').split(', ')
-            
-            frame_no_list.append(frame_no)
-            coordinates_list.append(tuple(map(int, text_position)))
-            content_list.append(content)
-
-        # Unify similar coordinates to group slightly different detections of the same box
-        coordinates_list = self._unite_coordinates(coordinates_list)
-
-        # Update the raw subtitle file with unified coordinates
-        with open(self.raw_subtitle_path, mode='w', encoding='utf-8') as f:
-            for frame_no, coordinate, content in zip(frame_no_list, coordinates_list, content_list):
-                f.write(f'{frame_no}\t{coordinate}\t{content}\n')
-        
-        # A placeholder for a configurable number of top watermark candidates
-        WATERMARK_AREA_NUM = 5 
-        return Counter(coordinates_list).most_common(WATERMARK_AREA_NUM)
-
-    def _detect_subtitle_area(self):
-        """
-        Analyzes the raw subtitle file to find the most common Y-coordinate range, which is likely the subtitle area.
-        """
-        with open(self.raw_subtitle_path, mode='r', encoding='utf-8') as f:
-            lines = f.readlines()
-
-        y_coordinates_list = []
-        for line in lines:
-            parts = line.strip().split('\t')
-            if len(parts) != 3:
-                continue
-            _, coordinate_str, _ = parts
-            text_position = coordinate_str.replace('(', '').replace(')', '').split(', ')
-            y_coordinates_list.append((int(text_position[2]), int(text_position[3])))
-            
-        return Counter(y_coordinates_list).most_common(1)
 
     def _unite_coordinates(self, coordinates_list):
         """
