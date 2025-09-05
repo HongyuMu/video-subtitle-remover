@@ -1372,8 +1372,9 @@
                     // Show detailed success message
                     alert(`Successfully merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0] + 1} to frame ${mergedInterval.frame_range[1] + 1}.`);
                     console.log(`[Merge]`, `Merged interval ${currentIntervalIdx + 1} with interval ${currentIntervalIdx}. New interval spans from frame ${mergedInterval.frame_range[0] + 1} to frame ${mergedInterval.frame_range[1] + 1}.`);
-                    // Load the merged interval and position timeline at the end
-                    await loadInterval(newIntervalIdx, false, true);
+                    // Load the merged interval and position timeline at the new start frame
+                    await loadInterval(newIntervalIdx, false, false);
+                    setTimelinePosition(Math.max(0, mergedInterval.frame_range[0]));
                 } else {
                     alert("Failed to merge with previous interval.");
                 }
