@@ -232,16 +232,58 @@ uvicorn app:app --host 0.0.0.0 --port 8002
 
 可以查看design文件夹里面的训练方法，利用backend/tools/train里面的代码进行训练，然后将训练的模型替换旧模型即可
 
-2. ProPainter处理时显存不够怎么办
+2. 生成的字幕为空或缺失怎么办
+
+可以按以下步骤排查与优化：
+
+- 在编辑器中使用“通用边界框”模式，手动框住字幕大致区域后再生成字幕。
+- 提高帧抓取频率，在 `backend/config.py` 中增大 `EXTRACT_FREQUENCY`（例如从 3 提高到 5-8）：
+
+```python
+EXTRACT_FREQUENCY = 6
+```
+
+- 放宽检测/识别阈值，在 `backend/config.py` 中适当降低：
+
+```python
+DET_DB_BOX_THRESH = 0.5  # 原为 0.6
+DROP_SCORE = 0.6         # 原为 0.75
+```
+
+- 确认识别语言正确（`settings.ini` 中 `Language` 或使用默认自动模式）；需要更高准确率时将模式设为 `accurate`：
+
+```ini
+[DEFAULT]
+Mode = accurate
+```
+
+- 对于被丢弃的超短区间，可在 `backend/config.py` 中降低 `MIN_INTERVAL_LEN`，以避免过度合并或丢弃：
+
+```python
+MIN_INTERVAL_LEN = 3
+```
+
+3. ProPainter处理时显存不够怎么办
 
 对于不同的分辨率，本项目理论上可以通过计算测试视频文件的分辨率和每组的帧数调整处理输入视频时的batch_num。如果仍然出现显存不够的情况，您可以修改backend/config.py中的PROPAINTER_MAX_LOAD_NUM来重新计算每一组的最大处理帧数。
 
-3. CondaHTTPError
+4. CondaHTTPError
 
 将项目中的.condarc放在用户目录下(C:/Users/<你的用户名>)，如果用户目录已经存在该文件则覆盖
 
 解决方案：https://zhuanlan.zhihu.com/p/260034241
 
-4. 7z文件解压错误
+5. 7z文件解压错误
 
 解决方案：升级7-zip解压程序到最新版本
+
+6. 上传失败或文件过大怎么办
+
+默认上传大小限制为 80MB。您可以在 `app.py` 中调整限制后重启服务（注意：80MB非常接近ProPainter模式下RTX 3090四卡显存的处理上限，所以如果您希望使用ProPainter模式，请谨慎调整上传限制）：
+
+```python
+# app.py
+MAX_UPLOAD_MB = 200  # 将限制提高到200MB
+```
+
+如果使用 URL/云端方式上传（表单字段 `url` 或 `cloud_ref`），同样受此限制控制。过大的文件建议先本地压缩或裁剪后再上传。
