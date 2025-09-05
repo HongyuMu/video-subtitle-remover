@@ -1630,8 +1630,8 @@ class SubtitleRemover:
             width = max(1, int(self.frame_width))
             height = max(1, int(self.frame_height))
             pixels = width * height
-            base_numer = 1280 * 720 * 40
-            target = base_numer // pixels if pixels > 0 else 40
+            base_numer = 1280 * 720 * config.PROPAINTER_MAX_LOAD_NUM
+            target = base_numer // pixels if pixels > 0 else config.PROPAINTER_MAX_LOAD_NUM
             # Clamp to [10, 60]
             if target < 10:
                 target = 10
@@ -1639,7 +1639,7 @@ class SubtitleRemover:
                 target = 60
             return int(target)
         except Exception:
-            return int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', 40))
+            return int(getattr(config, 'PROPAINTER_MAX_LOAD_NUM', config.PROPAINTER_MAX_LOAD_NUM))
     
 def find_smallest_bounding_box(coordinates):
     # Initialize min and max values based on the first box
