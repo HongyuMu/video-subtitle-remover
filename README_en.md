@@ -41,16 +41,16 @@ Windows GPU Version v1.1.0 (GPU):
 **Docker Versions:**
 ```shell
   # Nvidia 10, 20, 30 Series Graphics Cards
-  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda11.8 
+  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda11.8
 
   # Nvidia 40 Series Graphics Cards
-  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda12.6 
+  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda12.6
 
   # Nvidia 50 Series Graphics Cards
-  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda12.8 
+  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-cuda12.8
 
   # AMD / Intel Dedicated or Integrated Graphics
-  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-directml 
+  docker run -it --name vsr --gpus all eritpchy/video-subtitle-remover:1.1.1-directml
 
   # Demo video, input
   /vsr/test/test.mp4
@@ -158,71 +158,122 @@ This project supports two runtime modes: CUDA (NVIDIA GPU acceleration) and Dire
   ```shell
   pip install paddlepaddle==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
   pip install -r requirements.txt
-  pip install -r requirements_directml.txt
+  pip install torch_directml==0.2.5.dev240914
   ```
 
+## Web UI User Instructions
 
-#### 4. Run the program
+#### 1. Start the Web server
 
-- Run the graphical interface
-
-```shell
-python gui.py
-```
-
-- Run the command line version (CLI)
+Make sure `fastapi` and `uvicorn` are installed.
 
 ```shell
-python ./backend/main.py
+pip install fastapi uvicorn
 ```
 
-## Common Issues
+Run from the project root:
 
-1. How to deal with slow removal speed
+```shell
+uvicorn app:app --host 0.0.0.0 --port 8002
+```
 
-You can greatly increase the removal speed by modifying the parameters in backend/config.py:
+#### 2. Access the upload page
 
+Open your browser and visit `http://evowork.tech:8002` (or `http://localhost:8002` if running locally). You will see the video upload page.
+
+#### 3. Upload and prepare the video
+
+Upload your video file. After the upload completes, you will be redirected to the subtitle editor page. Notice that there is a file size limit of 80MB due to ProPainter's high requirement on GPU memory. Check FAQ #6 for more information.
+
+#### 4. Subtitle region detection and OCR
+
+You will see two subtitle detection options in the top-right of the editor UI:
+
+- **Use Universal Subtitle Box (recommended):** A green box will appear on the video. Play the video and adjust this box to cover the typical subtitle area across the video. Click “Set and Generate Subtitles” when ready.
+- **Use Automatic Detection:** Let the backend find subtitle regions automatically.
+
+The backend will then run OCR to detect and extract text, generate SRT subtitles, and embed the SRT into the UI. This may take some time; a progress bar shows real-time status.
+
+#### 5. Adjust subtitles
+
+- **Navigate intervals:** Use “Prev”/“Next” buttons or click a subtitle line on the left scroller panel. The timeline shows the current position.
+- **Adjust the text box:** For each interval, a box appears on the video preview. You can:
+  - Drag the box or edges directly on the video to resize.
+  - Adjust X/Y/Width/Height via sliders or inputs.
+- **Adjust interval range:** Modify “Start Frame” and “End Frame” to precisely cover the subtitle duration.
+- **Advanced controls:**
+  - **Use previous box:** Apply the previous interval’s box to the current one.
+  - **Not a subtitle:** Mark an interval to skip during processing.
+  - **Split current interval:** Split at the current frame if multiple subtitles exist within one interval.
+  - **Merge with previous:** Merge the current interval with the previous one.
+  - **Reset box:** Restore the box to initial coordinates.
+
+#### 6. Process the video
+
+When satisfied, click “Finish and Process” and choose an inpainting mode:
+
+- **STTN:** Fast and memory-efficient; suitable for stable scenes.
+- **Lama:** Good for anime or still images.
+- **ProPainter:** Highest quality, especially for fast-paced videos. It applies multiprocessing acceleration on systems with multiple GPU cores. ProPainter uses significantly more memory/time. For example, a 720p ~2000-frame video may take ~10 minutes.
+
+Processing will start in the backend; a progress bar will show the status.
+
+#### 7. Download results
+
+A download link will be provided for the final processed video.
+
+## Frequently Asked Questions
+0. How to view the exact frame I want
+
+Click on the slider below the Timeline section, then you can drag with mouse or move forward/back using keyboard control. You can adjust the step size for multi-frame movements.
+
+1. What to do if you are not satisfied with the removal quality
+
+You can review training methods in the `design` folder and use the code under `backend/tools/train` to train your own models, then replace the old models.
+
+2. Generated subtitles are empty or missing
+
+Try the following to improve results:
+
+- In the editor, use the “Select and Generate” mode and manually cover the subtitle area before generating.
+- Increase frame extraction frequency in `backend/config.py` (e.g., from 3 to 5–8):
 ```python
-MODE = InpaintMode.STTN  # Set to STTN algorithm
-STTN_SKIP_DETECTION = True # Skip subtitle detection
+EXTRACT_FREQUENCY = 6
 ```
-
-2. What to do if the video removal results are not satisfactory
-
-Modify the values in backend/config.py and try different removal algorithms. Here is an introduction to the algorithms:
-
-> - **InpaintMode.STTN** algorithm: Good for live-action videos and fast in speed, capable of skipping subtitle detection
-> - **InpaintMode.LAMA** algorithm: Best for images and effective for animated videos, moderate speed, unable to skip subtitle detection
-> - **InpaintMode.PROPAINTER** algorithm: Consumes a significant amount of VRAM, slower in speed, works better for videos with very intense movement
-
-- Using the STTN algorithm
-
+- Loosen detection/recognition thresholds in `backend/config.py`:
 ```python
-MODE = InpaintMode.STTN  # Set to STTN algorithm
-# Number of neighboring frames, increasing this will increase memory usage and improve the result
-STTN_NEIGHBOR_STRIDE = 10
-# Length of reference frames, increasing this will increase memory usage and improve the result
-STTN_REFERENCE_LENGTH = 10
-# Set the maximum number of frames processed simultaneously by the STTN algorithm, a larger value leads to slower processing but better results
-# Ensure that STTN_MAX_LOAD_NUM is greater than STTN_NEIGHBOR_STRIDE and STTN_REFERENCE_LENGTH
-STTN_MAX_LOAD_NUM = 30
+DET_DB_BOX_THRESH = 0.5  # default at 0.6
+DROP_SCORE = 0.6         # default at 0.75
 ```
-- Using the LAMA algorithm
-
+- Ensure the recognition language is correct (`settings.ini` `Language` or use the default auto mode). For higher accuracy, set mode to `accurate`:
+```ini
+[DEFAULT]
+Mode = accurate
+```
+- For very short intervals being dropped, lower `MIN_INTERVAL_LEN` in `backend/config.py` to avoid over-merge or discard:
 ```python
-MODE = InpaintMode.LAMA  # Set to LAMA algorithm
-LAMA_SUPER_FAST = False  # Ensure quality
+MIN_INTERVAL_LEN = 3
 ```
 
+3. Out of memory when using ProPainter
 
-3. CondaHTTPError
+The project should be able to adjust batch size using a formula involving training resolution, actual resolution, and training batch size. If OOM persists, modify `PROPAINTER_MAX_LOAD_NUM` in `backend/config.py` to recalculate the maximum frames per group.
 
-Place the .condarc file from the project in the user directory (C:/Users/<your_username>). If the file already exists in the user directory, overwrite it.
+4. CondaHTTPError
+
+Place the `.condarc` file from the project into the user directory (`C:/Users/<your_username>`). Overwrite if it already exists.
 
 Solution: https://zhuanlan.zhihu.com/p/260034241
 
-4. 7z file extraction error
+5. 7z file extraction error
 
-Solution: Upgrade the 7-zip extraction program to the latest version.
+Solution: upgrade 7-Zip to the latest version.
 
+6. Upload failed or file too large
+
+The default upload size limit is 80 MB. You can adjust it in `app.py` and restart the service (note: 80 MB is close to the VRAM limit for ProPainter on RTX 3090 4-core GPU setups; increase with caution if you plan to use ProPainter):
+```python
+# app.py
+MAX_UPLOAD_MB = 200  # increase to 200 MB
+```
 
